@@ -1,0 +1,162 @@
+# license:BSD-3-Clause
+# copyright-holders:Olivier Galibert (MAME tmsinstr.lst / 57002dsm.cpp); Python port: JSW and Claude
+# TMS57002 "DASP" disassembler. 24-bit instructions: fa = op>>18; fa == 0x3F -> category 3 by (op>>11)&0x7F,
+# else category 1 by fa + category 2 by (op>>11)&0x7F.
+
+TABLE = {
+    (1, 0x01): 'abs',
+    (1, 0x02): 'neg',
+    (1, 0x03): 'add %d,a',
+    (1, 0x04): 'add %c,a',
+    (1, 0x05): 'add %d,m',
+    (1, 0x06): 'add %c,m',
+    (1, 0x07): 'add %d,%c',
+    (1, 0x08): 'adds %d',
+    (1, 0x09): 'sub %d,a',
+    (1, 0x0a): 'sub %c,a',
+    (1, 0x0b): 'sub %d,m',
+    (1, 0x0c): 'sub %c,m',
+    (1, 0x0d): 'sub %d,%c',
+    (1, 0x10): 'zacc',
+    (1, 0x11): 'lacd %d',
+    (1, 0x12): 'lacc %c',
+    (1, 0x13): 'cmpl',
+    (1, 0x14): 'and %d,a',
+    (1, 0x15): 'and %c,a',
+    (1, 0x16): 'and %d,%c',
+    (1, 0x17): 'or %d,a',
+    (1, 0x18): 'or %c,a',
+    (1, 0x19): 'or %d,%c',
+    (1, 0x1a): 'xor %d,a',
+    (1, 0x1b): 'xor %c,a',
+    (1, 0x1c): 'xor %d,%c',
+    (1, 0x21): 'mpy %d,%c',
+    (1, 0x22): 'mpy %c,a',
+    (1, 0x23): 'mpy creg,%d',
+    (1, 0x24): 'mac %d,%c',
+    (1, 0x25): 'mac a,%d',
+    (1, 0x26): 'mac %c,a',
+    (1, 0x28): 'mpyu %d,%c',
+    (1, 0x29): 'macu %d,%c',
+    (1, 0x2a): 'macu a,%d',
+    (1, 0x2c): 'ampy %d,%c,a',
+    (1, 0x2d): 'amac %d,%c,a',
+    (1, 0x2e): 'macs %c,a',
+    (1, 0x30): 'zmac',
+    (1, 0x31): 'lmhd %d',
+    (1, 0x32): 'lmld %d',
+    (1, 0x33): 'lmhc %c',
+    (1, 0x34): 'sfml',
+    (1, 0x35): 'sfmr',
+    (1, 0x38): 'wre %d,%c',
+    (1, 0x39): 'rde %c',
+    (2, 0x01): 'sacc %c',
+    (2, 0x02): 'sacd %d',
+    (2, 0x03): 'smhd %d',
+    (2, 0x04): 'smld %d',
+    (2, 0x05): 'smhc %c',
+    (2, 0x06): 'slmh %d',
+    (2, 0x07): 'slml %d',
+    (2, 0x08): 'lcaa',
+    (2, 0x09): 'lira',
+    (2, 0x0c): 'ld0t %d',
+    (2, 0x0d): 'std1 %d',
+    (2, 0x0e): 'ref',
+    (2, 0x0f): 'srbd %d',
+    (2, 0x10): 'dis si0_l,%d',
+    (2, 0x11): 'dis si0_r,%d',
+    (2, 0x12): 'dis si1_l,%d',
+    (2, 0x13): 'dis si1_r,%d',
+    (2, 0x14): 'dimh si0_l',
+    (2, 0x15): 'dimh si0_r',
+    (2, 0x16): 'dimh si1_l',
+    (2, 0x17): 'dimh si1_r',
+    (2, 0x18): 'diml si0_l',
+    (2, 0x19): 'diml si0_r',
+    (2, 0x1a): 'diml si1_l',
+    (2, 0x1b): 'diml si1_r',
+    (2, 0x1c): 'dos so0_l,%d',
+    (2, 0x1d): 'dos so0_r,%d',
+    (2, 0x1e): 'dos so1_l,%d',
+    (2, 0x1f): 'dos so1_r,%d',
+    (2, 0x20): 'domh so0_l',
+    (2, 0x21): 'domh so0_r',
+    (2, 0x22): 'domh so1_l',
+    (2, 0x23): 'domh so1_r',
+    (2, 0x24): 'doml so0_l',
+    (2, 0x25): 'doml so0_r',
+    (2, 0x26): 'doml so1_l',
+    (2, 0x27): 'doml so1_r',
+    (2, 0x30): 'lpd %d',
+    (2, 0x31): 'lpc %c',
+    (2, 0x38): 'raov',
+    (2, 0x3a): 'rmov',
+    (2, 0x3c): 'raom',
+    (2, 0x3d): 'saom',
+    (2, 0x40): 'rmom',
+    (2, 0x41): 'smom',
+    (2, 0x42): 'incd',
+    (2, 0x44): 'ldpk 0',
+    (2, 0x45): 'ldpk 1',
+    (2, 0x48): 'scrm 32',
+    (2, 0x49): 'scrm 16h',
+    (2, 0x4a): 'scrm 16l',
+    (2, 0x4b): 'scrm <3>',
+    (2, 0x50): 'sfao 0',
+    (2, 0x51): 'sfao 7',
+    (2, 0x54): 'sfai 0',
+    (2, 0x55): 'sfai -1',
+    (2, 0x58): 'sfma 0',
+    (2, 0x59): 'sfma 2',
+    (2, 0x5a): 'sfma 4',
+    (2, 0x5b): 'sfma -16',
+    (2, 0x60): 'sfmo 0',
+    (2, 0x61): 'sfmo 2',
+    (2, 0x62): 'sfmo 4',
+    (2, 0x63): 'sfmo -8',
+    (2, 0x68): 'rnd 48',
+    (2, 0x69): 'rnd 32',
+    (2, 0x6a): 'rnd 24',
+    (2, 0x6b): 'rnd 20',
+    (2, 0x6c): 'rnd 16',
+    (2, 0x6d): 'rnd <5>',
+    (2, 0x6e): 'rnd <6>',
+    (2, 0x6f): 'rnd <7>',
+    (3, 0x08): 'idle',
+    (3, 0x10): 'rptk %i',
+    (3, 0x18): 'lcak %i',
+    (3, 0x20): 'lirk %i',
+    (3, 0x28): 'lbrk %i',
+    (3, 0x40): 'lcac %i',
+    (3, 0x48): 'b %i',
+    (3, 0x50): 'bgz %i',
+    (3, 0x58): 'blz %i',
+    (3, 0x60): 'bnz %i',
+    (3, 0x70): 'bioz %i',
+    (3, 0x78): 'bv %i',
+}
+
+
+def memadr(op, t):
+    if ((op & 0x400) and t == "c") or (not (op & 0x400) and t == "d"):
+        if op & 0x100: return "%s(%02x)" % (t, op & 0xFF)
+        return "%s*+" % t if op & 0x80 else "%s*" % t
+    return "%s*+" % t if op & 0x200 else "%s*" % t
+
+
+def fmt(op, d):
+    return d.replace("%d", memadr(op, "d")).replace("%c", memadr(op, "c")).replace("%i", "%02x" % (op & 0xFF))
+
+
+def dis(op):
+    fa = op >> 18
+    c2 = (op >> 11) & 0x7F
+    if fa == 0x3F:
+        d = TABLE.get((3, c2))
+        return fmt(op, d) if d else "unk c3 %02x" % c2
+    parts = []
+    if fa:
+        d = TABLE.get((1, fa)); parts.append(fmt(op, d) if d else "unk c1 %02x" % fa)
+    if c2:
+        d = TABLE.get((2, c2)); parts.append(fmt(op, d) if d else "unk c2 %02x" % c2)
+    return " ; ".join(parts) if parts else "nop"

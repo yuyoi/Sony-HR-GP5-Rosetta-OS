@@ -64,11 +64,9 @@ EP:R5 -> FD11, inverted, FD10 bit 4 handshake, FP+1 bytes). Every block is a mul
 | common | `0x1A925` | 213 B | 71 |
 | tail | `0x1AEE3` | 60 B | 20 |
 
-So about 1.5 KB of DSP code (`0x1A91F-0x1AF1E`) and 115 instructions per program, of the TMS57002's 256 program
-words: room for our own DSP code. Effect parameters are computed by ~80 page-1 routines (handler table `0x15B82`,
-`0x1497F`) and sent as coefficient writes (`sub_15638`: FE05 address + FE06/FE08 data). The edit buffer is RAM
-`0x41280`, its DSP-side copy `0x41330`; the driver diffs them and sends only what changed. Program byte `+0x5D` =
-structure type. The rest of page 1 (`0x1AF1F-0x1F595`, ~18 KB) isn't identified yet (tables, curves?).
+That's only part of it: the full TMS57002 program also has a 162-word effect-chain block from the rest of page 1,
+and the INIT program uses 250 of the 256 instructions (the TMS57002 is full). There's also a second DSP.
+Everything about the DSPs is in [DSP.md](DSP.md).
 
 ## Programs (`sub_01870`, R4 = program number -> EP:R4 = 176-byte program)
 | number | where |

@@ -56,6 +56,7 @@ class Emu:
         s.trace = None
         s.adc = {0xFFE0: 0xC0, 0xFFE2: 0x00}
         s.fastloops = True
+        s.dsplog = None                         # list of (port, value, icount) for FD00/FD10/FD11 writes
         s.frc_base = {}
         v = struct.unpack(">I", s.rom[0:4])[0]
         s.cp, s.pc = (v >> 16) & 0xFF, v & 0xFFFF
@@ -113,6 +114,8 @@ class Emu:
         return s.onchip[o - 0xFD00]
 
     def io_wr(s, o, v):
+        if s.dsplog is not None and o in (0xFD00, 0xFD10, 0xFD11):
+            s.dsplog.append((o, v, s.icount))
         s.onchip[o - 0xFD00] = v
         if o == 0xFD01: s.fd01 = v
         elif o == 0xFD30: s.lcd.write(0, v)
