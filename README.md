@@ -22,7 +22,8 @@ your PC. Don't share dumps, builds or disassembly listings: share this repo inst
 | What | Status |
 |---|---|
 | Hex girl boot animation, then the stock boot screen | **hardware** |
-| **Rosetta OS v0.1**: factory presets stripped to one INIT program (17 KB of page 0 freed), TEST mode off, SYSTEM -> B = **ROSET** screen | built, **emulator-tested**, not on hardware yet |
+| **Rosetta OS v0.1**: factory presets stripped to one INIT program (17 KB of page 0 freed), TEST mode off, SYSTEM -> B = **ROSET** screen | **hardware** |
+| **Rosetta OS v0.2**: Classic Mac page engine (folder-tab windows, 3 rows, scroll bar, edit box), ROSETTA menu: MODULATION, TEMPO (settings only so far), BOOT (Hex girl on/off, works), ABOUT. Settings kept in battery RAM | **emulator-tested** |
 | Your own boot animation: any 228 x 40 GIF in, burnable ROM out | built, emulator-verified (same player) |
 | Firmware map: CPU, LCD, boot flow, fonts, free space ([docs/FINDINGS.md](docs/FINDINGS.md)) | done |
 | Buttons, dial, power-on combos ([docs/CONTROLS.md](docs/CONTROLS.md)) | mapped from code |

@@ -6,7 +6,8 @@
   - The row = `table + (ui_page - 1) * 26`. `ui_page` = `FD99` (1-8).
   - Each row is **13 words** (page-0 code addresses): slots 0-11 = keys k0-k11 (see [CONTROLS.md](CONTROLS.md)),
     slot 12 = dial / idle.
-  - **Dial moved:** jump to slot 12 with R4 = delta.
+  - **Dial moved:** jump to the slot whose number the caller passes in R1 (screens pass `FD9C`, the last A-F key,
+    so the dial edits that key's parameter; it starts as 12) with R4 = delta.
   - **Key k pressed** (`FDDC+k` bit 7): clears it, jumps to slot k with R4 = k. For k = 1-6 (A-F) it also stores
     k in `FD9C` (`ui_last_fkey`), with the previous value in R5.
   - **Nothing happened:** jump to slot 12 with R4 = 0.
@@ -89,6 +90,20 @@ Multi-page sets (SETUP, 5 pages) and other range types still need decoding; all 
   and METER/TUNE work as everywhere; A-F free for features). Word tables must sit on even addresses.
 - The top-right of text row 0 is the firmware's status corner (BYPASS etc. draw there).
 - BYPASS also sends MIDI (the TX interrupt is vector 0xB4, SCI2 at FFC0).
+
+## Rosetta OS v0.2: the Mac page engine (`src/rosetta.asm`)
+- Folder-tab window: black tab with the bold title, status text right, 3 rows, inverted selection, scroll bar,
+  edit mode = the value punched out in a white box. Drawn straight into Sony's LCD shadow.
+- Page = `title.w, status.w, count.b, 0, items`; item (8 B) = `label.w, kind.b, max.b, ptr.w, aux.w`,
+  kinds SUB (aux unused, ptr = page), NUM (ptr = RAM var, aux = apply routine), LIST (aux = names table),
+  ACT (ptr = routine), INFO (aux = text).
+- Keys: dial moves the selection or edits; A-F = rows 1-6 (select + open/edit); EDIT/PAGE = open/edit;
+  EXIT = edit off / back / leave to SYSTEM. The screen passes R1 = 12 to `ui_dispatch` so the dial always lands
+  in slot 12.
+- Settings: battery RAM `0x47000-0x470FF` (never touched by Sony: write survey + code check), magic `'RS'`;
+  `0x47002` = HEX GIRL boot flag, also read by the page-1 boot player.
+- Emulator guards: Rosetta code may only write the LCD shadow, its settings block, the stack and `0x462E0`, and
+  never make an odd word access. (Sony's own DSP code does odd word reads; the hardware tolerates them.)
 
 ## Hooks for new menus (plan)
 - **Cheapest new menu = a new page set.** Write a descriptor + labels, reuse Sony's own value routines (on/off

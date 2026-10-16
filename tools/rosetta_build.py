@@ -9,7 +9,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.1"
+VERSION = "0.2"
 PRESETS, PRESET_LEN = 0xB318, 0xB0
 INIT_FROM = 8                        # "Transparnt" becomes the single INIT program
 FREE0, FREE0_END = PRESETS + PRESET_LEN, 0xF7D8
@@ -68,7 +68,7 @@ def build(out):
     # 5. Hex girl boot (page 1)
     px, durs = anim_build.load_frames(os.path.join(ROOT, "frames", "rosetta_boot.gif"))
     holds = [round(dd / 50.0) if dd else 1 for dd in durs]
-    anim_build.build(px, holds, 0x4B, out, rom=rom)
+    anim_build.build(px, holds, 0x4B, out, rom=rom, bootflag=True)
     final = bytearray(open(out, "rb").read())
     with open(out[:-4] + "_rosetta.lst", "w", encoding="utf-8") as f:
         f.write(a.listing(bytes(final), 0) + "\n")
@@ -79,23 +79,39 @@ def build(out):
 
 def emu_tour(img, shots):
     os.makedirs(shots, exist_ok=True)
+    for f in os.listdir(shots):
+        if f.endswith(".png"): os.remove(os.path.join(shots, f))
     e = gp5emu.Emu(img)
     e.run(1_500_000)
     out = []
     def snap(name):
         p = os.path.join(shots, name + ".png"); e.png(p); out.append((name, e.text().splitlines()))
-    snap("1_play")
-    e.press("SYSTEM"); snap("2_system")
-    e.press("B"); snap("3_rosetta")
-    e.press("BYPASS"); snap("4_rosetta_bypass")
-    e.press("EXIT"); snap("5_back_to_system")
-    e.press("EXIT"); snap("6_play")
-    return out
+    steps = [("SYSTEM", None), ("B", "01_root"), ("dial+1", "02_root_tempo"), ("dial+5", "03_root_about_scroll"),
+             ("C", "04_boot_page"), ("EDIT", "05_boot_edit"), ("dial-1", "06_boot_off"), ("EXIT", "07_boot_edit_off"),
+             ("EXIT", "08_back_root"), ("A", "09_mod"), ("dial+1", None), ("EDIT", "10_mod_rate_edit"),
+             ("dial+7", "11_rate_27"), ("EXIT", None), ("dial+3", "12_mod_scrolled"), ("EXIT", None),
+             ("D", "13_about"), ("EXIT", None), ("EXIT", "14_back_to_system")]
+    for k, name in steps:
+        if k.startswith("dial"): e.dial(int(k[4:]), 150000)
+        else: e.press(k)
+        if name: snap(name)
+    ram = bytes(e.ram)
+    return out, ram
+
+
+def emu_boot_skip(img, ram):
+    """second power-on with HEX GIRL = OFF in battery RAM: the animation must be skipped"""
+    e = gp5emu.Emu(img); e.ram[:] = ram
+    assert ram[0x7000:0x7003] == b"RS\x00", "settings not saved: %r" % ram[0x7000:0x7003]
+    e.run(400_000)
+    return e.text().splitlines()[0]
 
 
 if __name__ == "__main__":
     out = os.path.join(ROOT, "build", "hrgp5_rosetta_os.bin")
     img, sy = build(out)
-    for name, lines in emu_tour(bytes(img), os.path.join(ROOT, "out", "shots")):
-        print("--", name); print("\n".join(l.rstrip(".") for l in (lines[0], lines[4])))
+    shots, ram = emu_tour(bytes(img), os.path.join(ROOT, "out", "shots"))
+    for name, lines in shots:
+        print("--", name)
+    print("power-on with HEX GIRL off, top text row after 0.27 s:", repr(emu_boot_skip(bytes(img), ram)))
     print("x4 md5", hashlib.md5(open(out[:-4] + "_SST39SF040_x4.bin", "rb").read()).hexdigest())

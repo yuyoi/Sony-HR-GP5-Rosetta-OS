@@ -83,7 +83,7 @@ def probe_src(hi, lo, tick):
     ]
 
 
-def assemble(base, data_addr, tick, probe=False):
+def assemble(base, data_addr, tick, probe=False, bootflag=False):
     hi, lo = lambda v: (v >> 8) & 0xFF, lambda v: v & 0xFF
     src = [
         ("raw", "12 3f"),               # STM.W (R0-R5),@-SP
@@ -91,6 +91,13 @@ def assemble(base, data_addr, tick, probe=False):
         ("raw", "0c 07 00 48"),         # ORC.W #H'0700,SR  mask IRQs: IRQ0 LCD stream must not fight our blits
         ("raw", "04 04 8d"),            # LDC.B #4,DP   (R0-R3 -> page 4 RAM)
         ("raw", "04 01 8c"),            # LDC.B #1,EP   (R4-R5 -> page 1 ROM)
+    ] + ([
+        ("raw", "1d 70 00 05 52 53"),   # CMP.W #'RS',@0x7000   Rosetta settings valid?
+        ("br", 0x26, "play"),           # BNE play              (no: default = play)
+        ("raw", "15 70 02 04 00"),      # CMP.B #0,@0x7002      HEX GIRL = OFF?
+        ("br16", 0x37, "done"),         # BEQ done              (skip the animation)
+        ("lbl", "play"),
+    ] if bootflag else []) + [
         ("br", 0x1e, "clrz"),           # BSR clrz
         ("raw", "5c %02x %02x" % (hi(data_addr), lo(data_addr))),  # MOV.W #data,R4
         ("lbl", "frame"),
@@ -249,12 +256,16 @@ def assemble(base, data_addr, tick, probe=False):
     for it in src:
         if it[0] == "lbl": labels[it[1]] = pc
         elif it[0] == "br": pc += 3 if it[1] == 0x1e else 2
+        elif it[0] == "br16": pc += 3
         else:
             marks[it[0]] = pc; pc += len(bytes.fromhex(it[1]))
     code, pc = bytearray(), base
     for it in src:
         if it[0] == "lbl": continue
-        if it[0] == "br" and it[1] == 0x1e:   # BSR disp16
+        if it[0] == "br16":                   # Bcc disp16
+            d = labels[it[2]] - (pc + 3)
+            code += bytes([it[1], (d >> 8) & 0xFF, d & 0xFF]); pc += 3
+        elif it[0] == "br" and it[1] == 0x1e:   # BSR disp16
             d = labels[it[2]] - (pc + 3)
             code += bytes([0x1e, (d >> 8) & 0xFF, d & 0xFF]); pc += 3
         elif it[0] == "br":
@@ -342,6 +353,11 @@ def emulate(rom, entry, labels):
         elif op == "CLR.W": R[rn(args[0])] = 0; Z = 1
         elif op == "CLR.B": wr(int(args[0][2]), 0)
         elif op == "EXTU.B": R[rn(args[0])] &= 0xFF
+        elif op in ("CMP.W", "CMP.B") and absa:          # CMP #imm,@aa:16 (DP = 4: Rosetta settings in RAM)
+            assert page["DP"] == 4
+            ad = int(absa.group(1), 16)
+            a = (ram[ad] << 8 | ram[ad + 1]) if op == "CMP.W" else ram[ad]
+            b = imm(args[0]); Z, C = a == b, a < b
         elif op == "CMP.W": a, b = R[rn(args[1])], imm(args[0]); Z, C = a == b, a < b
         elif op == "BTST.B": Z = not (R[rn(args[1])] >> int(args[0][1:])) & 1
         elif op == "AND.B": r = rn(args[1]); R[r] = (R[r] & 0xFF00) | (R[r] & imm(args[0]) & 0xFF); Z = (R[r] & 0xFF) == 0
@@ -356,7 +372,7 @@ def emulate(rom, entry, labels):
         pc = nxt
 
 
-def build(frames_px, holds, tick, out, probe=False, rom=None):
+def build(frames_px, holds, tick, out, probe=False, rom=None, bootflag=False):
     """rom = an already-patched image to add the boot animation to (default: the stock dump)"""
     if rom is None:
         rom = bytearray(open(ROM_IN, "rb").read())
@@ -367,9 +383,9 @@ def build(frames_px, holds, tick, out, probe=False, rom=None):
     limit = PROBE_P1 if probe else LIMIT
     packed = [pack(p) for p in frames_px]
     holds = [max(1, min(127, h)) for h in holds]
-    code, labels, marks = assemble(PLAYER, 0, tick, probe)          # size pass
+    code, labels, marks = assemble(PLAYER, 0, tick, probe, bootflag)          # size pass
     data_addr = PLAYER + len(code)
-    code, labels, marks = assemble(PLAYER, data_addr & 0xFFFF, tick, probe)
+    code, labels, marks = assemble(PLAYER, data_addr & 0xFFFF, tick, probe, bootflag)
     stream = codec2.build_stream(packed, holds, data_addr)
     assert codec2.decode_stream(stream, data_addr) == list(zip(holds, packed))
     end = data_addr + len(stream)

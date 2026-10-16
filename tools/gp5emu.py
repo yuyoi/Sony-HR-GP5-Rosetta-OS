@@ -56,6 +56,9 @@ class Emu:
         s.trace = None
         s.adc = {0xFFE0: 0xC0, 0xFFE2: 0x00}
         s.fastloops = True
+        s.strict = [(0x0B3C8, 0x0F7D8), (0x1F596, 0x20000)]   # Rosetta code + boot player: odd word access = bug
+        s.odd_count = 0
+        s.ram_ok = {0x62E0}                     # Sony vars Rosetta may write on purpose (0x462E0 = "not in PLAY")
         s.ramw = None                           # set of page-4 offsets written (RAM usage survey)
         s.dsplog = None                         # list of (port, value, icount) for FD00/FD10/FD11 writes
         s.frc_base = {}
@@ -90,15 +93,26 @@ class Emu:
             if o in (0xFF92, 0xFFA2, 0xFFB2): s.frc_base[o] = s.icount * 2   # counter write = restart (any value)
             return
         if pg == 4 and o < 0x8000:
+            if s.strict and not (o < 0x06AE or 0x7000 <= o < 0x7100 or o >= 0x7E00 or o in s.ram_ok):
+                pc = (s.cp << 16) | s.pc
+                if any(lo <= pc < hi for lo, hi in s.strict):
+                    raise Halt("Rosetta code wrote RAM %05X (pc %06X): outside shadow / settings / stack" % (0x40000 | o, pc))
             s.ram[o] = v
             if s.ramw is not None: s.ramw.add(o)
 
+    def odd(s, a, what):
+        """odd word access: Sony's own code does this (8-bit bus tolerates it); our code must never"""
+        pc = (s.cp << 16) | s.pc
+        if any(lo <= pc < hi for lo, hi in s.strict):
+            raise Halt("address error: word %s at %06X (pc %06X)" % (what, a, pc))
+        s.odd_count += 1
+
     def rd16(s, a):
-        if a & 1: raise Halt("address error: word read at %06X (pc %02X:%04X)" % (a, s.cp, s.pc))
+        if a & 1: s.odd(a, "read")
         return (s.rd8(a) << 8) | s.rd8((a & 0xFF0000) | ((a + 1) & 0xFFFF))
 
     def wr16(s, a, v):
-        if a & 1: raise Halt("address error: word write at %06X (pc %02X:%04X)" % (a, s.cp, s.pc))
+        if a & 1: s.odd(a, "write")
         s.wr8(a, v >> 8); s.wr8((a & 0xFF0000) | ((a + 1) & 0xFFFF), v)
 
     def io_rd(s, o):
