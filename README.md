@@ -24,8 +24,12 @@ your PC. Don't share dumps, builds or disassembly listings: share this repo inst
 | Hex girl boot animation, then the stock boot screen | **hardware** |
 | Your own boot animation: any 228 x 40 GIF in, burnable ROM out | built, emulator-verified (same player) |
 | Firmware map: CPU, LCD, boot flow, fonts, free space ([docs/FINDINGS.md](docs/FINDINGS.md)) | done |
+| Buttons, dial, power-on combos ([docs/CONTROLS.md](docs/CONTROLS.md)) | mapped from code |
+| UI engine, every screen, the settings-page engine ([docs/MENU_MAP.md](docs/MENU_MAP.md)) | mapped from code |
+| Memory map: chips, ROM, RAM, I/O, programs, LCD API ([docs/MEMORY_MAP.md](docs/MEMORY_MAP.md)) | first pass |
+| New menus (a ROSETTA page via the settings engine) | planned, needs page-0 ROM space |
 | Animation speed | not timed on hardware yet (a guess at 50 ms per step) |
-| Hidden SysEx hooks, new DSP effects | to do |
+| Hidden SysEx hooks, new DSP effects (DSP = TI TMS57002) | to do |
 
 ## How it works
 
@@ -74,9 +78,12 @@ your PC. Don't share dumps, builds or disassembly listings: share this repo inst
 | `tools/codec2.py` | the frame codec (encoder, reference decoder) |
 | `tools/gp5lcd.py` | LCD model; renders the stock boot screen from your dump to a PNG |
 | `tools/h8500dis.py` | H8/500 disassembler (Python port of MAME's) with code tracing |
-| `tools/mklisting.py` | full traced listing of your dump (keep it to yourself) |
+| `tools/gp5re.py` | annotated listing of your dump: follows the UI tables, names symbols, RAM and strings (keep `out/` to yourself) |
+| `tools/symbols.py` | every address we've named so far |
+| `tools/mklisting.py` | plain traced listing (older) |
 | `tools/sp808_boot.py` | remakes `frames/rosetta_boot.gif` from the SP-808 repo's frames |
-| `docs/FINDINGS.md` | everything we found: memory map, vectors, boot flow, LCD, fonts, free space, the patch |
+| `docs/FINDINGS.md` | boot flow, LCD, fonts, the boot patch |
+| `docs/CONTROLS.md`, `docs/MENU_MAP.md`, `docs/MEMORY_MAP.md` | buttons, screens + settings engine, memory and I/O |
 
 ## Legal
 

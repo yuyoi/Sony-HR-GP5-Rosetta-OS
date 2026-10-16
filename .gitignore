@@ -14,3 +14,4 @@
 *.lst
 *.cov
 /tools/demo_frames.py
+/out/
