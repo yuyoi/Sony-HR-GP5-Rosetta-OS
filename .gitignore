@@ -1,0 +1,16 @@
+# Whitelist: Sony ROM dumps, builds (they contain Sony code) and disassembly listings can never be added.
+/*
+!/.gitignore
+!/README.md
+!/LICENSE
+!/docs/
+!/tools/
+!/frames/
+/tools/__pycache__/
+/frames/*
+!/frames/rosetta_boot.gif
+!/frames/TEMPLATE_blank_228x40.png
+*.bin
+*.lst
+*.cov
+/tools/demo_frames.py

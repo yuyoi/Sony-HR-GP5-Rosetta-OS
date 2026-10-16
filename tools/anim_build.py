@@ -1,0 +1,388 @@
+# HR-GP5 boot animation builder.
+#   python -I tools/anim_build.py <frames.gif | frames_dir> [--hold N] [--tick N] [--out build/x.bin]
+# Frames: 228x40, dark pixel = LCD dot on. Each frame is delta-coded against the previous one (codec2.py),
+# a small H8/500 player in page-1 free space plays them, then the stock boot screen draws.
+import sys, os, re, hashlib, argparse
+sys.path.insert(0, os.path.dirname(__file__))
+from h8500dis import Dis
+from gp5lcd import W, H, CR, Screen, to_png
+from PIL import Image, ImageSequence
+
+ROM_IN = os.path.join(os.path.dirname(__file__), "..", "dumps", "hrgp5_eprom_read1.bin")
+STOCK_MD5 = "4db502640e1a799b2114d42262dbdff9"
+HOOK = 0x2558                       # sub_02558 = boot screen, only caller 0x0063E
+HOOK_ORIG = bytes.fromhex("18 10 21 04 04 8d")  # JSR @H'1021 ; LDC.B #4,DP
+PLAYER = 0x1F5A0                    # page-1 free space (FF from 0x1F596)
+LIMIT = 0x1FFFF                     # keep 0x1FFFF (test-mode checksum byte) untouched
+GBYTES = CR * H                     # 1520 bytes graphics layer
+
+
+# ---------- frames ----------
+def load_frames(src, invert=False):
+    ims, durs = [], []
+    if os.path.isdir(src):
+        for f in sorted(os.listdir(src)):
+            if f.lower().endswith((".png", ".bmp", ".gif")):
+                ims.append(Image.open(os.path.join(src, f)).convert("L")); durs.append(None)
+    else:
+        im = Image.open(src)
+        for fr in ImageSequence.Iterator(im):
+            ims.append(fr.convert("L")); durs.append(fr.info.get("duration"))
+    out = []
+    for im in ims:
+        if im.size != (W, H):
+            sys.exit("frame is %dx%d, must be %dx%d" % (im.size + (W, H)))
+        px = im.load()
+        out.append([[(px[x, y] < 128) ^ invert for x in range(W)] for y in range(H)])
+    return out, durs
+
+
+def pack(px):
+    b = bytearray(GBYTES)
+    for y in range(H):
+        for c in range(CR):
+            v = 0
+            for x in range(6): v |= px[y][c * 6 + x] << (7 - x)
+            b[y * CR + c] = v
+    return bytes(b)
+
+
+import codec2
+
+
+# ---------- player (hand-assembled H8/500, page 1) ----------
+def assemble(base, data_addr, tick):
+    hi, lo = lambda v: (v >> 8) & 0xFF, lambda v: v & 0xFF
+    src = [
+        ("raw", "12 3f"),               # STM.W (R0-R5),@-SP
+        ("raw", "bf 98"),               # STC.W SR,@-SP
+        ("raw", "0c 07 00 48"),         # ORC.W #H'0700,SR  mask IRQs: IRQ0 LCD stream must not fight our blits
+        ("raw", "04 04 8d"),            # LDC.B #4,DP   (R0-R3 -> page 4 RAM)
+        ("raw", "04 01 8c"),            # LDC.B #1,EP   (R4-R5 -> page 1 ROM)
+        ("br", 0x1e, "clrz"),           # BSR clrz
+        ("raw", "5c %02x %02x" % (hi(data_addr), lo(data_addr))),  # MOV.W #data,R4
+        ("lbl", "frame"),
+        ("raw", "c4 85"),               # MOV.B @R4+,R5   hold (0 = end, bit 7 = replay)
+        ("br", 0x27, "done"),
+        ("raw", "a5 f7"),               # BTST.B #7,R5
+        ("br", 0x27, "plain"),
+        ("raw", "04 7f 55"),            # AND.B #H'7F,R5
+        ("raw", "c4 81"),               # MOV.B @R4+,R1   replay address hi
+        ("raw", "a1 10"),               # SWAP.B R1
+        ("raw", "c4 81"),               # MOV.B @R4+,R1   lo
+        ("raw", "bf 94"),               # MOV.W R4,@-SP
+        ("raw", "a9 84"),               # MOV.W R1,R4
+        ("br", 0x1e, "decode"),
+        ("raw", "cf 84"),               # MOV.W @SP+,R4
+        ("br", 0x20, "show"),
+        ("lbl", "plain"),
+        ("br", 0x1e, "decode"),
+        ("lbl", "show"),
+        ("br", 0x1e, "blit"),           # BSR blit   frame -> LCD directly
+        ("lbl", "hold"),
+        ("tick", "5b %02x %02x" % (hi(tick), lo(tick))),  # MOV.W #tick,R3
+        ("lbl", "t1"),
+        ("inner", "5a 01 90"),          # MOV.W #H'0190,R2 (same unit as stock sub_019E1)
+        ("lbl", "t2"),
+        ("raw", "0c 00 01 32"),         # SUB.W #1,R2
+        ("br", 0x26, "t2"),
+        ("raw", "0c 00 01 33"),         # SUB.W #1,R3
+        ("br", 0x26, "t1"),
+        ("raw", "04 01 35"),            # SUB.B #1,R5
+        ("br", 0x26, "hold"),
+        ("br", 0x20, "frame"),
+        ("lbl", "done"),
+        ("br", 0x1e, "clr"),            # BSR clr  (what the replaced JSR @H'1021 did)
+        ("br", 0x1e, "lcdrst"),         # BSR lcdrst (hand the LCD back to the IRQ0 streamer)
+        ("raw", "cf 88"),               # LDC.W @SP+,SR
+        ("raw", "02 3f"),               # LDM.W @SP+,(R0-R5)
+        ("raw", "04 04 8d"),            # LDC.B #4,DP  (replaced instruction)
+        ("raw", "11 19"),               # PRTS
+        # decode one frame: tokens @R4 (EP) applied in place to RAM 0x40000 (DP), format in codec2.py
+        ("lbl", "decode"),
+        ("raw", "a8 13"),               # CLR.W R0
+        ("lbl", "tok"),
+        ("raw", "48 05 f0"),            # CMP.W #H'05F0,R0
+        ("br", 0x24, "dret"),           # BCC dret
+        ("raw", "c4 81"),               # MOV.B @R4+,R1   token
+        ("raw", "a1 82"),               # MOV.B R1,R2
+        ("raw", "a2 12"),               # EXTU.B R2
+        ("raw", "a1 f7"),               # BTST.B #7,R1
+        ("br", 0x26, "hi80"),
+        ("raw", "a1 f6"),               # BTST.B #6,R1
+        ("br", 0x26, "hi40"),
+        ("raw", "a1 f5"),               # BTST.B #5,R1
+        ("br", 0x26, "skipl"),
+        ("raw", "aa 08"),               # ADD.W #1,R2     00-1F skip n+1
+        ("lbl", "skip"),
+        ("raw", "aa 20"),               # ADD.W R2,R0
+        ("br", 0x20, "tok"),
+        ("lbl", "skipl"),
+        ("raw", "41 3f"),               # CMP.B #H'3F,R1  3F = end of frame
+        ("br", 0x27, "dret"),
+        ("raw", "04 1f 52"),            # AND.B #H'1F,R2  20-3E skip (n+1)*32
+        ("raw", "aa 08"),               # ADD.W #1,R2
+        ("raw", "aa 1a"), ("raw", "aa 1a"), ("raw", "aa 1a"), ("raw", "aa 1a"), ("raw", "aa 1a"),  # SHLL.W R2 x5
+        ("br", 0x20, "skip"),
+        ("lbl", "hi40"),
+        ("raw", "a1 f5"),               # BTST.B #5,R1
+        ("br", 0x26, "copyl"),
+        ("raw", "04 1f 52"),            # AND.B #H'1F,R2  40-5F fill n+1
+        ("raw", "aa 08"),               # ADD.W #1,R2
+        ("raw", "c4 83"),               # MOV.B @R4+,R3
+        ("lbl", "floop"),
+        ("raw", "c0 93"),               # MOV.B R3,@R0+
+        ("raw", "0c 00 01 32"),         # SUB.W #1,R2
+        ("br", 0x26, "floop"),
+        ("br", 0x20, "tok"),
+        ("lbl", "copyl"),
+        ("raw", "04 1f 52"),            # AND.B #H'1F,R2  60-7F copy long
+        ("raw", "a2 10"),               # SWAP.B R2
+        ("raw", "c4 82"),               # MOV.B @R4+,R2   length lo
+        ("raw", "aa 08"),               # ADD.W #1,R2
+        ("raw", "c4 83"),               # MOV.B @R4+,R3   offset
+        ("raw", "a3 12"),               # EXTU.B R3
+        ("br", 0x20, "copy"),
+        ("lbl", "hi80"),
+        ("raw", "04 3f 52"),            # AND.B #H'3F,R2
+        ("raw", "aa 08"),               # ADD.W #1,R2
+        ("raw", "a1 f6"),               # BTST.B #6,R1
+        ("br", 0x26, "copy1"),
+        ("lbl", "xl"),                  # 80-BF XOR literals
+        ("raw", "c4 83"),               # MOV.B @R4+,R3
+        ("raw", "d0 63"),               # XOR.B @R0,R3
+        ("raw", "c0 93"),               # MOV.B R3,@R0+
+        ("raw", "0c 00 01 32"),         # SUB.W #1,R2
+        ("br", 0x26, "xl"),
+        ("br", 0x20, "tok"),
+        ("lbl", "copy1"),               # C0-FF copy from pos+1
+        ("raw", "5b 00 01"),            # MOV.W #1,R3
+        ("lbl", "copy"),
+        ("raw", "a8 23"),               # ADD.W R0,R3     R3 = source (ahead of R0)
+        ("lbl", "cl"),
+        ("raw", "c3 81"),               # MOV.B @R3+,R1
+        ("raw", "c0 91"),               # MOV.B R1,@R0+
+        ("raw", "0c 00 01 32"),         # SUB.W #1,R2
+        ("br", 0x26, "cl"),
+        ("br", 0x20, "tok"),
+        ("lbl", "dret"),
+        ("raw", "19"),                  # RTS
+        ("lbl", "blit"),                # RAM 0x40000-0x406AD -> SED1330 VRAM 0
+        ("raw", "bf 95"),               # MOV.W R5,@-SP
+        ("raw", "04 00 8d"),            # LDC.B #0,DP  (@aa:16 -> page 0 I/O)
+        ("raw", "04 04 8c"),            # LDC.B #4,EP  (R5 -> page 4 RAM)
+        ("br", 0x1e, "curs0"),
+        ("raw", "ad 13"),               # CLR.W R5
+        ("lbl", "b1"),
+        ("raw", "c5 83"),               # MOV.B @R5+,R3
+        ("raw", "15 fd 30 93"),         # MOV.B R3,@H'FD30:16
+        ("raw", "4d 06 ae"),            # CMP.W #H'06AE,R5
+        ("br", 0x26, "b1"),
+        ("raw", "04 01 8c"),            # LDC.B #1,EP
+        ("raw", "04 04 8d"),            # LDC.B #4,DP
+        ("raw", "cf 85"),               # MOV.W @SP+,R5
+        ("raw", "19"),                  # RTS
+        ("lbl", "lcdrst"),              # = stock sub_00F2B
+        ("raw", "04 00 8d"),            # LDC.B #0,DP
+        ("raw", "1d fd d8 13"),         # CLR.W @H'FDD8:16  stream position
+        ("raw", "15 fd da 13"),         # CLR.B @H'FDDA:16
+        ("br", 0x1e, "curs0"),
+        ("raw", "04 04 8d"),            # LDC.B #4,DP
+        ("raw", "19"),                  # RTS
+        ("lbl", "curs0"),               # CSRW 0, CSRDIR right, MWRITE (DP=0)
+        ("raw", "15 fd 31 06 46"),      # MOV.B #H'46,@H'FD31:16
+        ("raw", "15 fd 30 06 00"),      # MOV.B #H'00,@H'FD30:16
+        ("raw", "15 fd 30 06 00"),      # MOV.B #H'00,@H'FD30:16
+        ("raw", "15 fd 31 06 4c"),      # MOV.B #H'4C,@H'FD31:16
+        ("raw", "15 fd 31 06 42"),      # MOV.B #H'42,@H'FD31:16
+        ("raw", "19"),                  # RTS
+        ("lbl", "clr"),
+        ("br", 0x1e, "clrz"),
+        ("raw", "58 01 30"),            # MOV.W #H'0130,R0
+        ("lbl", "c2"),
+        ("raw", "c0 06 fc"),            # MOV.B #H'FC,@R0+  (title underline, as stock)
+        ("raw", "48 01 56"),            # CMP.W #H'0156,R0
+        ("br", 0x26, "c2"),
+        ("raw", "19"),                  # RTS
+        ("lbl", "clrz"),
+        ("raw", "a8 13"),               # CLR.W R0
+        ("lbl", "c1"),
+        ("raw", "c0 13"),               # CLR.B @R0+
+        ("raw", "48 06 ae"),            # CMP.W #H'06AE,R0
+        ("br", 0x26, "c1"),
+        ("raw", "19"),                  # RTS
+    ]
+    labels, marks, pc = {}, {}, base
+    for it in src:
+        if it[0] == "lbl": labels[it[1]] = pc
+        elif it[0] == "br": pc += 3 if it[1] == 0x1e else 2
+        else:
+            marks[it[0]] = pc; pc += len(bytes.fromhex(it[1]))
+    code, pc = bytearray(), base
+    for it in src:
+        if it[0] == "lbl": continue
+        if it[0] == "br" and it[1] == 0x1e:   # BSR disp16
+            d = labels[it[2]] - (pc + 3)
+            code += bytes([0x1e, (d >> 8) & 0xFF, d & 0xFF]); pc += 3
+        elif it[0] == "br":
+            d = labels[it[2]] - (pc + 2)
+            assert -128 <= d <= 127, it
+            code += bytes([it[1], d & 0xFF]); pc += 2
+        else:
+            b = bytes.fromhex(it[1]); code += b; pc += len(b)
+    return bytes(code), labels, marks
+
+
+# ---------- tiny emulator for the player (checks the hand assembly) ----------
+def emulate(rom, entry, labels):
+    d = Dis(rom)
+    R, ram, stack = [0] * 8, bytearray(0x10000), []
+    ram[:0x800] = bytes(range(256)) * 8          # junk, so missed clears show up
+    page = {"DP": 0, "EP": 0}
+    Z = C = 0
+    pc, frames, steps, last = entry, [], 0, ""
+    sr = [0x0000]
+    lcd = {"cmd": None, "args": [], "cur": 0, "vram": bytearray(0x800), "io": {}}
+
+    def rd(r, inc):  # @Rn / @Rn+ read, R0-R3 via DP, R4-R5 via EP
+        a, pg = R[r], page["DP"] if r < 4 else page["EP"]
+        v = ram[a] if pg == 4 else rom[(pg << 16) | a]
+        if inc: R[r] = (a + 1) & 0xFFFF
+        return v
+
+    def io(a, v):  # @aa:16 write with DP=0
+        assert page["DP"] == 0, "I/O write with DP!=0"
+        if a in (0xFD30, 0xFD31): assert sr[0] & 0x0700 == 0x0700, "LCD write with IRQs open"
+        if a == 0xFD31: lcd["cmd"], lcd["args"] = v, []
+        elif a == 0xFD30:
+            if lcd["cmd"] == 0x46:
+                lcd["args"].append(v)
+                if len(lcd["args"]) == 2: lcd["cur"] = lcd["args"][0] | lcd["args"][1] << 8
+            elif lcd["cmd"] == 0x42:
+                lcd["vram"][lcd["cur"]] = v; lcd["cur"] += 1
+        else: lcd["io"][a] = v
+
+    def wr(r, v):
+        assert r < 4 and page["DP"] == 4
+        ram[R[r]] = v & 0xFF; R[r] = (R[r] + 1) & 0xFFFF
+
+    while True:
+        steps += 1
+        assert steps < 5_000_000, "runaway"
+        if pc == labels["hold"] and last == "RTS":   # just back from blit
+            assert lcd["vram"][:0x6AE] == ram[:0x6AE], "VRAM != RAM after blit"
+            frames.append(bytes(lcd["vram"][:GBYTES]))
+        i = d.dec(pc); t = i.text; nxt = pc + i.len; last = t
+        rn = lambda s: int(s[1]) if s[0] == "R" else None
+        m = re.match(r"(\S+) ?(.*)", t); op, args = m.group(1), [a.strip() for a in m.group(2).split(",")] if m.group(2) else []
+        imm = lambda s: int(s[3:], 16)
+        absa = re.match(r"@H'([0-9A-F]{4}):16", args[-1]) if args else None
+        if op == "STM.W": stack.append(list(R))
+        elif op == "LDM.W": R[:6] = stack.pop()[:6]
+        elif t == "STC.W SR, @-SP": stack.append(sr[0])
+        elif t == "LDC.W @SP+, SR": sr[0] = stack.pop()
+        elif op == "ORC.W" and args[1] == "SR": sr[0] |= imm(args[0])
+        elif op == "MOV.W" and args[1] == "@-SP": stack.append(R[rn(args[0])])
+        elif op == "MOV.W" and args[0] == "@SP+": R[rn(args[1])] = stack.pop()
+        elif absa and op in ("MOV.B", "CLR.B", "CLR.W"):
+            a = int(absa.group(1), 16)
+            v = 0 if op.startswith("CLR") else imm(args[0]) if args[0].startswith("#") else R[rn(args[0])] & 0xFF
+            io(a, v)
+        elif op == "LDC.B": page[args[1]] = imm(args[0])
+        elif op in ("BSR",): stack.append(nxt); nxt = i.target
+        elif op == "RTS": nxt = (pc & ~0xFFFF) | stack.pop()
+        elif op == "PRTS": return frames, R, page, ram, sr[0], lcd, stack
+        elif op == "MOV.W" and args[0].startswith("#"): R[rn(args[1])] = imm(args[0]); Z = R[rn(args[1])] == 0
+        elif op == "MOV.B" and args[0].startswith("@R"):
+            v = rd(int(args[0][2]), args[0].endswith("+")); R[rn(args[1])] = (R[rn(args[1])] & 0xFF00) | v; Z = v == 0
+        elif op == "MOV.B" and args[1].startswith("@R"):
+            src = imm(args[0]) if args[0].startswith("#") else R[rn(args[0])] & 0xFF
+            wr(int(args[1][2]), src)
+        elif op == "MOV.B": R[rn(args[1])] = (R[rn(args[1])] & 0xFF00) | (R[rn(args[0])] & 0xFF)
+        elif op == "MOV.W" and rn(args[0]) is not None and rn(args[1]) is not None: R[rn(args[1])] = R[rn(args[0])]
+        elif op == "SWAP.B": r = rn(args[0]); R[r] = ((R[r] << 8) | (R[r] >> 8)) & 0xFFFF
+        elif op == "SHLL.W": r = rn(args[0]); R[r] = (R[r] << 1) & 0xFFFF
+        elif op == "XOR.B" and args[0] == "@R0": r = rn(args[1]); R[r] = (R[r] & 0xFF00) | ((R[r] ^ rd(0, False)) & 0xFF)
+        elif op == "CMP.B" and args[0].startswith("#"): a, b = R[rn(args[1])] & 0xFF, imm(args[0]); Z, C = a == b, a < b
+        elif op == "CLR.W": R[rn(args[0])] = 0; Z = 1
+        elif op == "CLR.B": wr(int(args[0][2]), 0)
+        elif op == "EXTU.B": R[rn(args[0])] &= 0xFF
+        elif op == "CMP.W": a, b = R[rn(args[1])], imm(args[0]); Z, C = a == b, a < b
+        elif op == "BTST.B": Z = not (R[rn(args[1])] >> int(args[0][1:])) & 1
+        elif op == "AND.B": r = rn(args[1]); R[r] = (R[r] & 0xFF00) | (R[r] & imm(args[0]) & 0xFF); Z = (R[r] & 0xFF) == 0
+        elif op == "ADD.W" and args[0].startswith("#"): R[rn(args[1])] = (R[rn(args[1])] + int(args[0][1:])) & 0xFFFF
+        elif op == "ADD.W": R[rn(args[1])] = (R[rn(args[1])] + R[rn(args[0])]) & 0xFFFF
+        elif op == "SUB.W": r = rn(args[1]); R[r] = (R[r] - imm(args[0])) & 0xFFFF; Z = R[r] == 0
+        elif op == "SUB.B": r = rn(args[1]); v = ((R[r] & 0xFF) - imm(args[0])) & 0xFF; R[r] = (R[r] & 0xFF00) | v; Z = v == 0
+        elif op in ("BEQ", "BNE", "BCC", "BRA"):
+            take = {"BEQ": Z, "BNE": not Z, "BCC": not C, "BRA": True}[op]
+            if take: nxt = i.target
+        else: raise RuntimeError("emu: unhandled %05X %s" % (pc, t))
+        pc = nxt
+
+
+def build(frames_px, holds, tick, out):
+    rom = bytearray(open(ROM_IN, "rb").read())
+    assert hashlib.md5(rom).hexdigest() == STOCK_MD5, "input is not the stock dump"
+    assert rom[HOOK:HOOK + 6] == HOOK_ORIG, "hook bytes changed?"
+    assert all(b == 0xFF for b in rom[0x1F596:0x20000])
+    packed = [pack(p) for p in frames_px]
+    holds = [max(1, min(127, h)) for h in holds]
+    code, labels, marks = assemble(PLAYER, 0, tick)          # size pass
+    data_addr = PLAYER + len(code)
+    code, labels, marks = assemble(PLAYER, data_addr & 0xFFFF, tick)
+    stream = codec2.build_stream(packed, holds, data_addr)
+    assert codec2.decode_stream(stream, data_addr) == list(zip(holds, packed))
+    end = data_addr + len(stream)
+    if end > LIMIT:
+        sys.exit("too big: %d bytes over (stream %d B, room %d B)" % (end - LIMIT, len(stream), LIMIT - data_addr))
+    rom[PLAYER:PLAYER + len(code)] = code
+    rom[data_addr:end] = stream
+    rom[HOOK:HOOK + 6] = bytes([0x03, PLAYER >> 16, (PLAYER >> 8) & 0xFF, PLAYER & 0xFF, 0x00, 0x00])  # PJSR + NOP NOP
+    # emulate with fast delays: patch tick + inner loop count to 1 in a scratch copy
+    emu = bytearray(rom)
+    emu[marks["tick"] + 1:marks["tick"] + 3] = b"\x00\x01"
+    emu[marks["inner"] + 1:marks["inner"] + 3] = b"\x00\x01"
+    eframes, R, page, ram, sr, lcd, stack = emulate(bytes(emu), PLAYER, labels)
+    assert eframes == packed, "emulated player output != input frames"
+    assert page["DP"] == 4 and ram[0x130:0x156] == b"\xfc" * 0x26 and not any(ram[:0x130]) \
+        and not any(ram[0x156:0x6AE]), "exit RAM state wrong"
+    assert sr == 0 and stack == [] and lcd["cmd"] == 0x42 and lcd["cur"] == 0 \
+        and lcd["io"] == {0xFDD8: 0, 0xFDDA: 0}, "exit LCD/IRQ state wrong"
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    open(out, "wb").write(rom)
+    open(out[:-4] + "_SST39SF040_x4.bin", "wb").write(bytes(rom) * 4)   # A17/A18 don't care in a 27C010 socket
+    lst = out[:-4] + "_player.lst"
+    with open(lst, "w", encoding="utf-8") as f:
+        d, pc = Dis(bytes(rom)), PLAYER
+        while pc < PLAYER + len(code):
+            i = d.dec(pc); f.write("%05X: %-14s %s\n" % (pc, rom[pc:pc + i.len].hex(" "), i.text)); pc += i.len
+        i = d.dec(HOOK); f.write("\nhook %05X: %s  %s\n" % (HOOK, rom[HOOK:HOOK + 6].hex(" "), i.text))
+    print("frames %d, stream %d B, player %d B @%05X, data @%05X-%05X, free left %d B"
+          % (len(packed), len(stream), len(code), PLAYER, data_addr, end - 1, LIMIT - end))
+    print("emulator: player reproduced all %d frames, exits cleanly" % len(eframes))
+    print("wrote %s  md5 %s" % (out, hashlib.md5(rom).hexdigest()))
+    return packed, holds
+
+
+def preview(packed, holds, path):
+    ims = []
+    for f in packed:
+        s = Screen(b""); s.ram[:GBYTES] = f
+        tmp = path + ".tmp.png"; to_png(s.pixels(), tmp, 3); ims.append(Image.open(tmp).copy()); os.remove(tmp)
+    ims[0].save(path, save_all=True, append_images=ims[1:], duration=[max(20, h * 50) for h in holds], loop=0)
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("frames")
+    ap.add_argument("--hold", type=int, default=1, help="hold per frame in ticks (GIF durations override)")
+    ap.add_argument("--tick", type=lambda x: int(x, 0), default=0x4B, help="stock delay units per tick (stock boot screen = 700); 0x4B ~ 50 ms, estimate")
+    ap.add_argument("--ms-per-tick", type=float, default=50.0, help="GIF ms per tick")
+    ap.add_argument("--invert", action="store_true")
+    ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "..", "build", "hrgp5_anim.bin"))
+    a = ap.parse_args()
+    px, durs = load_frames(a.frames, a.invert)
+    holds = [round(dd / a.ms_per_tick) if dd else a.hold for dd in durs]
+    packed, holds = build(px, holds, a.tick, a.out)
+    preview(packed, holds, a.out[:-4] + "_preview.gif")
