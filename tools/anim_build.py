@@ -51,7 +51,39 @@ import codec2
 
 
 # ---------- player (hand-assembled H8/500, page 1) ----------
-def assemble(base, data_addr, tick):
+PROBE_P0, PROBE_P1 = 0x0FA00, 0x1FFFE      # markers: page 0 tail 'O'; page 1 '1' (A17=0 copies) / '3' (A17=1 copies)
+
+
+def probe_src(hi, lo, tick):
+    """after the animation: show [page0 FA00][page1 FFFE][page3 FFFE] on text row 0 for ~2 s.
+    'O1x': page-0 tail is ROM. x = '3': A17 reaches the chip (pages 2-3 usable), '1': it doesn't (mirror)."""
+    return [
+        ("raw", "04 00 8c"),            # LDC.B #0,EP
+        ("raw", "5c %02x %02x" % (hi(PROBE_P0), lo(PROBE_P0))),  # MOV.W #FA00,R4
+        ("raw", "d4 81"),               # MOV.B @R4,R1
+        ("raw", "04 01 8c"),            # LDC.B #1,EP
+        ("raw", "5c %02x %02x" % (hi(PROBE_P1), lo(PROBE_P1))),  # MOV.W #FFFE,R4
+        ("raw", "d4 82"),               # MOV.B @R4,R2
+        ("raw", "04 03 8c"),            # LDC.B #3,EP
+        ("raw", "d4 83"),               # MOV.B @R4,R3   (blit puts EP back to 1)
+        ("raw", "58 05 f0"),            # MOV.W #H'05F0,R0  text row 0, col 0
+        ("raw", "c0 91"),               # MOV.B R1,@R0+
+        ("raw", "c0 92"),               # MOV.B R2,@R0+
+        ("raw", "c0 93"),               # MOV.B R3,@R0+
+        ("br", 0x1e, "blit"),
+        ("raw", "55 28"),               # MOV.B #40,R5   ~2 s
+        ("lbl", "p0"),
+        ("ptick", "5b %02x %02x" % (hi(tick), lo(tick))),
+        ("lbl", "p1"),
+        ("pinner", "5a 01 90"),
+        ("lbl", "p2"),
+        ("raw", "0c 00 01 32"), ("br", 0x26, "p2"),
+        ("raw", "0c 00 01 33"), ("br", 0x26, "p1"),
+        ("raw", "04 01 35"), ("br", 0x26, "p0"),
+    ]
+
+
+def assemble(base, data_addr, tick, probe=False):
     hi, lo = lambda v: (v >> 8) & 0xFF, lambda v: v & 0xFF
     src = [
         ("raw", "12 3f"),               # STM.W (R0-R5),@-SP
@@ -92,6 +124,7 @@ def assemble(base, data_addr, tick):
         ("br", 0x26, "hold"),
         ("br", 0x20, "frame"),
         ("lbl", "done"),
+    ] + (probe_src(hi, lo, tick) if probe else []) + [
         ("br", 0x1e, "clr"),            # BSR clr  (what the replaced JSR @H'1021 did)
         ("br", 0x1e, "lcdrst"),         # BSR lcdrst (hand the LCD back to the IRQ0 streamer)
         ("raw", "cf 88"),               # LDC.W @SP+,SR
@@ -298,6 +331,8 @@ def emulate(rom, entry, labels):
         elif op == "MOV.B" and args[1].startswith("@R"):
             src = imm(args[0]) if args[0].startswith("#") else R[rn(args[0])] & 0xFF
             wr(int(args[1][2]), src)
+        elif op == "MOV.B" and args[0].startswith("#"):
+            r = rn(args[1]); R[r] = (R[r] & 0xFF00) | imm(args[0]); Z = imm(args[0]) == 0
         elif op == "MOV.B": R[rn(args[1])] = (R[rn(args[1])] & 0xFF00) | (R[rn(args[0])] & 0xFF)
         elif op == "MOV.W" and rn(args[0]) is not None and rn(args[1]) is not None: R[rn(args[1])] = R[rn(args[0])]
         elif op == "SWAP.B": r = rn(args[0]); R[r] = ((R[r] << 8) | (R[r] >> 8)) & 0xFFFF
@@ -321,37 +356,46 @@ def emulate(rom, entry, labels):
         pc = nxt
 
 
-def build(frames_px, holds, tick, out):
+def build(frames_px, holds, tick, out, probe=False):
     rom = bytearray(open(ROM_IN, "rb").read())
     assert hashlib.md5(rom).hexdigest() == STOCK_MD5, "input is not the stock dump"
     assert rom[HOOK:HOOK + 6] == HOOK_ORIG, "hook bytes changed?"
     assert all(b == 0xFF for b in rom[0x1F596:0x20000])
+    limit = PROBE_P1 if probe else LIMIT
     packed = [pack(p) for p in frames_px]
     holds = [max(1, min(127, h)) for h in holds]
-    code, labels, marks = assemble(PLAYER, 0, tick)          # size pass
+    code, labels, marks = assemble(PLAYER, 0, tick, probe)          # size pass
     data_addr = PLAYER + len(code)
-    code, labels, marks = assemble(PLAYER, data_addr & 0xFFFF, tick)
+    code, labels, marks = assemble(PLAYER, data_addr & 0xFFFF, tick, probe)
     stream = codec2.build_stream(packed, holds, data_addr)
     assert codec2.decode_stream(stream, data_addr) == list(zip(holds, packed))
     end = data_addr + len(stream)
-    if end > LIMIT:
-        sys.exit("too big: %d bytes over (stream %d B, room %d B)" % (end - LIMIT, len(stream), LIMIT - data_addr))
+    if end > limit:
+        sys.exit("too big: %d bytes over (stream %d B, room %d B)" % (end - limit, len(stream), limit - data_addr))
     rom[PLAYER:PLAYER + len(code)] = code
     rom[data_addr:end] = stream
     rom[HOOK:HOOK + 6] = bytes([0x03, PLAYER >> 16, (PLAYER >> 8) & 0xFF, PLAYER & 0xFF, 0x00, 0x00])  # PJSR + NOP NOP
-    # emulate with fast delays: patch tick + inner loop count to 1 in a scratch copy
-    emu = bytearray(rom)
-    emu[marks["tick"] + 1:marks["tick"] + 3] = b"\x00\x01"
-    emu[marks["inner"] + 1:marks["inner"] + 3] = b"\x00\x01"
+    rom_a17 = None
+    if probe:
+        assert rom[PROBE_P0] == 0xFF and rom[PROBE_P1] == 0xFF
+        rom[PROBE_P0] = ord("O"); rom[PROBE_P1] = ord("1")
+        rom_a17 = bytearray(rom); rom_a17[PROBE_P1] = ord("3")
+    # emulate with fast delays: patch tick + inner loop count to 1 in a scratch copy (pages 2-3 = the A17=1 copy)
+    emu = bytearray(rom) + (rom_a17 if probe else bytearray(rom))
+    for k in ("tick", "inner", "ptick", "pinner"):
+        if k in marks: emu[marks[k] + 1:marks[k] + 3] = b"\x00\x01"
     eframes, R, page, ram, sr, lcd, stack = emulate(bytes(emu), PLAYER, labels)
     assert eframes == packed, "emulated player output != input frames"
+    if probe:
+        assert bytes(lcd["vram"][0x5F0:0x5F3]) == b"O13", "probe markers wrong: %r" % bytes(lcd["vram"][0x5F0:0x5F3])
     assert page["DP"] == 4 and ram[0x130:0x156] == b"\xfc" * 0x26 and not any(ram[:0x130]) \
         and not any(ram[0x156:0x6AE]), "exit RAM state wrong"
     assert sr == 0 and stack == [] and lcd["cmd"] == 0x42 and lcd["cur"] == 0 \
         and lcd["io"] == {0xFDD8: 0, 0xFDDA: 0}, "exit LCD/IRQ state wrong"
     os.makedirs(os.path.dirname(out), exist_ok=True)
     open(out, "wb").write(rom)
-    open(out[:-4] + "_SST39SF040_x4.bin", "wb").write(bytes(rom) * 4)   # A17/A18 don't care in a 27C010 socket
+    # x4 for an SST39SF040 in the 27C010 socket: A17/A18 don't care (the probe build differs only at its A17 marker)
+    open(out[:-4] + "_SST39SF040_x4.bin", "wb").write(bytes(rom + (rom_a17 or rom)) * 2)
     lst = out[:-4] + "_player.lst"
     with open(lst, "w", encoding="utf-8") as f:
         d, pc = Dis(bytes(rom)), PLAYER
@@ -380,9 +424,10 @@ if __name__ == "__main__":
     ap.add_argument("--tick", type=lambda x: int(x, 0), default=0x4B, help="stock delay units per tick (stock boot screen = 700); 0x4B ~ 50 ms, estimate")
     ap.add_argument("--ms-per-tick", type=float, default=50.0, help="GIF ms per tick")
     ap.add_argument("--invert", action="store_true")
+    ap.add_argument("--probe", action="store_true", help="after the animation show ROM-space probe markers (see probe_src)")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "..", "build", "hrgp5_anim.bin"))
     a = ap.parse_args()
     px, durs = load_frames(a.frames, a.invert)
     holds = [round(dd / a.ms_per_tick) if dd else a.hold for dd in durs]
-    packed, holds = build(px, holds, a.tick, a.out)
+    packed, holds = build(px, holds, a.tick, a.out, a.probe)
     preview(packed, holds, a.out[:-4] + "_preview.gif")

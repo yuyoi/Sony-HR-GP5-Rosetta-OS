@@ -52,6 +52,24 @@ directly: it needs a page-0 stub (`JSR @x; PRTS`).
 | `0x15B82` | handler table (index & 0x7FF, `0x1497F`, not decoded yet) |
 | `0x1F596-0x1FFFE` | free: now the Hex girl player + frames (68 B left) |
 
+## Effect algorithms (DSP programs)
+The H8 builds the TMS57002 program from small blocks in EPROM page 1 and uploads it byte by byte (`sub_155E9`:
+EP:R5 -> FD11, inverted, FD10 bit 4 handshake, FP+1 bytes). Every block is a multiple of 3 bytes, which looks like
+24-bit DSP instruction words. The upload (`sub_15A3E`):
+
+| block | addr | size | words |
+|---|---|---|---|
+| header | `0x1A91F` | 6 B | 2 |
+| **structure** (program byte 0 & 0x3E -> table `0x1A8A2`) | `0x1A9FD + n * 0x42` | 66 B | 22, **19 structures** |
+| common | `0x1A925` | 213 B | 71 |
+| tail | `0x1AEE3` | 60 B | 20 |
+
+So about 1.5 KB of DSP code (`0x1A91F-0x1AF1E`) and 115 instructions per program, of the TMS57002's 256 program
+words: room for our own DSP code. Effect parameters are computed by ~80 page-1 routines (handler table `0x15B82`,
+`0x1497F`) and sent as coefficient writes (`sub_15638`: FE05 address + FE06/FE08 data). The edit buffer is RAM
+`0x41280`, its DSP-side copy `0x41330`; the driver diffs them and sends only what changed. Program byte `+0x5D` =
+structure type. The rest of page 1 (`0x1AF1F-0x1F595`, ~18 KB) isn't identified yet (tables, curves?).
+
 ## Programs (`sub_01870`, R4 = program number -> EP:R4 = 176-byte program)
 | number | where |
 |---|---|
@@ -123,5 +141,18 @@ Current program: RAM `0x462A1` (clamped to < 200 at boot), also `FDB4`.
   probably real ROM, but it's not proven: a one-burn probe can check it.
 - **More ROM:** if socket pin 30 reaches CPU A17, a bigger chip adds pages 2-3 (128 KB). The SST39SF040 we use is
   already big enough; the same probe can check.
-- **Fallback:** the 100 factory presets take 17.6 KB of page 0. Giving up a few (e.g. 90-99) frees 176 B each, in
-  proven ROM.
+- **Fallback:** the 100 factory presets take 17.6 KB of page 0 (`0xB318-0xF7D7`, they end exactly where the 0xFF
+  starts). Giving up a few (e.g. 90-99) frees 176 B each, in proven ROM.
+- **Probe build:** `anim_build.py --probe` = Hex girl + after the animation 3 characters on text row 0 for ~2 s:
+  `[page 0 0xFA00][page 1 0x1FFFE][page 3 0x1FFFE]`. The x4 SST image has `O` at page 0 `0xFA00` and `1` / `3` at
+  `0x1FFFE` in its A17 = 0 / A17 = 1 copies.
+  | shows | meaning |
+  |---|---|
+  | `O1 3` | page-0 tail is ROM, **A17 is wired: +128 KB (pages 2-3)** |
+  | `O1 1` | page-0 tail is ROM, A17 not wired (page 3 mirrors page 1) |
+  | `O` then `1`/`3` flicker | A17 pin floating on the board |
+  | not `O` first | page-0 tail is not readable ROM |
+
+## Patch memory
+There's no separate patch RAM: one 32 KB battery-backed SRAM (IC508) holds the user programs, edit buffers, system
+settings, MIDI rings and the screen shadow. Factory presets live in the EPROM.
