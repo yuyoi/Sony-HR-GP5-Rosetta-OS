@@ -81,6 +81,15 @@ The table ends where descriptor 2 starts, so **new ids need a relocated table** 
 
 Multi-page sets (SETUP, 5 pages) and other range types still need decoding; all routines are page-0 code.
 
+## Rosetta OS changes (v0.1)
+- SYSTEM:Select **B = ROSET** (was CLOCK): table word `0x4840` -> `ros_entry`, label at `0x4801`.
+  The slot icon is still the clock (icon list `0x47E1`, index 0x0C).
+- SYSTEM:Select C (was MEMRY): label blanked, key does nothing (`0x4842` -> `0x4829`).
+- The ROSETTA screen runs on `ui_dispatch` with its own table (EXIT/SYSTEM -> SYSTEM:Select, EDIT, SAVE, BYPASS
+  and METER/TUNE work as everywhere; A-F free for features). Word tables must sit on even addresses.
+- The top-right of text row 0 is the firmware's status corner (BYPASS etc. draw there).
+- BYPASS also sends MIDI (the TX interrupt is vector 0xB4, SCI2 at FFC0).
+
 ## Hooks for new menus (plan)
 - **Cheapest new menu = a new page set.** Write a descriptor + labels, reuse Sony's own value routines (on/off
   `0x64BB`, number `0x5B61`, ...), store values in free RAM, and point a slot type `0x4000` at our own code where

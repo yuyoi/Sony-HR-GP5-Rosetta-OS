@@ -136,6 +136,9 @@ Current program: RAM `0x462A1` (clamped to < 200 at boot), also `FDB4`.
 | `0x019E1` | delay_units | R0 x ~0.7 ms (guess) |
 
 ## Free space
+**Rosetta OS v0.1:** the factory presets are gone (programs 0-99 all load one INIT program at `0xB318`), so
+`0xB3C8-0xF7D7` (17.4 KB, proven ROM) is free for Rosetta code. v0.1 uses 181 B of it.
+
 - **Page 1:** `0x1F596-0x1FFFE`, used by the Hex girl boot (68 B left).
 - **Page 0:** `0x0F7D8-0x0FCFF` (1.3 KB) is 0xFF. The test mode's ROM sum reads page 0 up to `0xFD7F`, so it's
   probably real ROM, but it's not proven: a one-burn probe can check it.

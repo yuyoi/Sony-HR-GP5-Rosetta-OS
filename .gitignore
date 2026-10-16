@@ -6,6 +6,7 @@
 !/docs/
 !/tools/
 !/frames/
+!/src/
 /tools/__pycache__/
 /frames/*
 !/frames/rosetta_boot.gif

@@ -22,6 +22,7 @@ your PC. Don't share dumps, builds or disassembly listings: share this repo inst
 | What | Status |
 |---|---|
 | Hex girl boot animation, then the stock boot screen | **hardware** |
+| **Rosetta OS v0.1**: factory presets stripped to one INIT program (17 KB of page 0 freed), TEST mode off, SYSTEM -> B = **ROSET** screen | built, **emulator-tested**, not on hardware yet |
 | Your own boot animation: any 228 x 40 GIF in, burnable ROM out | built, emulator-verified (same player) |
 | Firmware map: CPU, LCD, boot flow, fonts, free space ([docs/FINDINGS.md](docs/FINDINGS.md)) | done |
 | Buttons, dial, power-on combos ([docs/CONTROLS.md](docs/CONTROLS.md)) | mapped from code |
@@ -74,6 +75,10 @@ your PC. Don't share dumps, builds or disassembly listings: share this repo inst
 
 | File | What |
 |---|---|
+| `tools/rosetta_build.py` | **builds Rosetta OS** from your dump: strip, assemble `src/rosetta.asm`, Hex girl, then an emulator tour with screenshots |
+| `src/rosetta.asm` | the Rosetta OS code (page 0) |
+| `tools/h85asm.py` | H8/500 assembler (every instruction checked against the disassembler) |
+| `tools/gp5emu.py` | **HR-GP5 emulator**: boots the real firmware, renders the LCD, presses keys (`--keys SYSTEM,B --png x.png`) |
 | `tools/anim_build.py` | frames in, patched ROM out (+ x4 SST image, preview, listing); all the checks above |
 | `tools/codec2.py` | the frame codec (encoder, reference decoder) |
 | `tools/gp5lcd.py` | LCD model; renders the stock boot screen from your dump to a PNG |

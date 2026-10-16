@@ -356,9 +356,12 @@ def emulate(rom, entry, labels):
         pc = nxt
 
 
-def build(frames_px, holds, tick, out, probe=False):
-    rom = bytearray(open(ROM_IN, "rb").read())
-    assert hashlib.md5(rom).hexdigest() == STOCK_MD5, "input is not the stock dump"
+def build(frames_px, holds, tick, out, probe=False, rom=None):
+    """rom = an already-patched image to add the boot animation to (default: the stock dump)"""
+    if rom is None:
+        rom = bytearray(open(ROM_IN, "rb").read())
+        assert hashlib.md5(rom).hexdigest() == STOCK_MD5, "input is not the stock dump"
+    rom = bytearray(rom)
     assert rom[HOOK:HOOK + 6] == HOOK_ORIG, "hook bytes changed?"
     assert all(b == 0xFF for b in rom[0x1F596:0x20000])
     limit = PROBE_P1 if probe else LIMIT
