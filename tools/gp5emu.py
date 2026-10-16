@@ -56,6 +56,7 @@ class Emu:
         s.trace = None
         s.adc = {0xFFE0: 0xC0, 0xFFE2: 0x00}
         s.fastloops = True
+        s.ramw = None                           # set of page-4 offsets written (RAM usage survey)
         s.dsplog = None                         # list of (port, value, icount) for FD00/FD10/FD11 writes
         s.frc_base = {}
         v = struct.unpack(">I", s.rom[0:4])[0]
@@ -85,9 +86,12 @@ class Emu:
             if o < 0xFD00: return                 # ROM
             if o < 0xFD80: return s.io_wr(o, v)
             s.onchip[o - 0xFD00] = v
+            if s.ramw is not None and 0xFD80 <= o < 0xFF80: s.ramw.add(0x10000 | o)
             if o in (0xFF92, 0xFFA2, 0xFFB2): s.frc_base[o] = s.icount * 2   # counter write = restart (any value)
             return
-        if pg == 4 and o < 0x8000: s.ram[o] = v
+        if pg == 4 and o < 0x8000:
+            s.ram[o] = v
+            if s.ramw is not None: s.ramw.add(o)
 
     def rd16(s, a):
         if a & 1: raise Halt("address error: word read at %06X (pc %02X:%04X)" % (a, s.cp, s.pc))

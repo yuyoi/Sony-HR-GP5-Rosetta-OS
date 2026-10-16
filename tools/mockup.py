@@ -14,13 +14,13 @@ class Canvas:
         if 0 <= x < W and 0 <= y < H:
             s.px[y][x] = (s.px[y][x] ^ v) if xor else v
 
-    def text(s, x, y, t, xor=False):
+    def text(s, x, y, t, xor=False, val=1):
         for ch in t:
             c = ord(ch)
             g = s.rom[0xA7C2 + (c & 0x7F) * 7:][:7]
             for r, v in enumerate(g):
                 for i in range(6):
-                    if (v >> (7 - i)) & 1: s.set(x + i, y + r, 1, xor)
+                    if (v >> (7 - i)) & 1: s.set(x + i, y + r, val, xor)
             x += 6
         return x
 
@@ -119,3 +119,120 @@ if __name__ == "__main__":
     for i, (t, im) in enumerate(ims):
         d.text((6, i * (h + 16) + 2), t, fill=(240, 240, 240)); sheet.paste(im, (0, i * (h + 16) + 15))
     sheet.save(out); print("wrote", out, sheet.size)
+
+
+# ---------------- Classic Mac house style (same as the SP-808 Rosetta OS) ----------------
+def mac_window(c, title):
+    """frame, pinstriped title bar with close box, title centred in a cleared gap, separator"""
+    c.rect(0, 0, W, H)
+    for y in (2, 4, 6, 8):
+        c.hline(2, y, W - 4)
+    tw = len(title) * 6 + 2                     # pseudo-bold title
+    tx = (W - tw) // 2
+    for yy in range(1, 10):
+        for xx in range(tx - 4, tx + tw + 4): c.set(xx, yy, 0)
+        for xx in range(4, 17): c.set(xx, yy, 0)
+    c.rect(6, 2, 9, 7)                          # close box
+    c.text(tx, 2, title); c.text(tx + 1, 2, title)
+    c.hline(1, 10, W - 2)
+
+
+def mac_rows(c, rows, sel=0, top=0, total=None, arrows=False):
+    """3 visible rows: (label, value); value right-aligned; selection inverted; scroll bar if more"""
+    total = total or len(rows)
+    for i, (lab, val) in enumerate(rows[top:top + 3]):
+        y = 11 + i * 9
+        c.text(4, y + 1, lab)
+        v = ">" if arrows else val
+        c.text(212 - 6 * len(v), y + 1, v)
+        if top + i == sel: c.rect(1, y, 216, 9, fill=True, xor=True)
+    if total > 3:                               # scroll bar
+        c.rect(218, 11, 9, 28)
+        th = max(5, 26 * 3 // total); ty = 12 + (26 - th) * top // max(1, total - 3)
+        c.rect(220, ty, 5, th, fill=True)
+    else:
+        for y in range(11, 39): c.set(218, y)
+
+
+def screens_mac(rom):
+    out = []
+    c = Canvas(rom); mac_window(c, "ROSETTA OS")
+    mac_rows(c, [("MODULATION", ""), ("TEMPO", ""), ("LAB", ""), ("MIDI", ""), ("BOOT", ""), ("ABOUT", "")], sel=0, arrows=True)
+    out.append(("1 ROSETTA menu: dial moves, EDIT/PAGE or A-F opens (A-F = rows 1-6)", c))
+    c = Canvas(rom); mac_window(c, "MOD: LFO 1")
+    mac_rows(c, [("WAVE", "TRIANGLE"), ("RATE", "1/8"), ("DEPTH", "35"), ("DEST", "DLY TIME"), ("SYNC", "ON")], sel=1)
+    out.append(("2 MOD page: dial selects, EDIT/PAGE = edit value with the dial, EXIT back", c))
+    c = Canvas(rom); mac_window(c, "DIST: HEX CRUNCH")
+    mac_rows(c, [("DRIVE", "72"), ("TONE", "48"), ("LEVEL", "60"), ("TYPE", "DIST2")], sel=0, top=0)
+    out.append(("3 Effect edit: one window per block, 3 rows + scroll", c))
+    c = Canvas(rom); mac_window(c, "P101  120 BPM")
+    c.big(4, 12, "Hex Crunch")
+    c.text(4, 31, "COMP DIST EQ DLY HALL"); c.text(164, 31, "-CHOR")
+    for y in range(11, 39): c.set(218, y)
+    out.append(("4 PLAY in the same style: big name, chain line (off blocks with -)", c))
+    return out
+
+
+def topbar(c, style, title, right=""):
+    """title-bar variants for the Mac window (rows start at y 11 in every variant)"""
+    c.rect(0, 0, W, H)
+    bold = lambda x, y, t: (c.text(x, y, t), c.text(x + 1, y, t))
+    tw = len(title) * 6 + 1
+    if style == "pinstripe":
+        mac_window(c, title); return
+    if style == "inverse":                       # solid black bar, white bold title (System 1 menu-bar feel)
+        c.rect(1, 1, W - 2, 9, fill=True)
+        x = (W - tw) // 2
+        c.text(x, 2, title, val=0); c.text(x + 1, 2, title, val=0)
+        if right: c.text(W - 4 - 6 * len(right), 2, right, val=0)
+    elif style == "underline":                   # plain bold title left, status right, one rule
+        bold(4, 2, title)
+        if right: c.text(W - 4 - 6 * len(right), 2, right)
+        c.hline(1, 10, W - 2)
+    elif style == "double":                      # dialog style: title, double rule
+        bold((W - tw) // 2, 1, title)
+        c.hline(1, 9, W - 2); c.hline(1, 10, W - 2)
+    elif style == "dither":                      # 50% desktop pattern with a cleared title box
+        for y in range(1, 10):
+            for x in range(1, W - 1):
+                if (x + y) & 1: c.set(x, y)
+        x = (W - tw) // 2
+        for y in range(1, 10):
+            for xx in range(x - 4, x + tw + 4): c.set(xx, y, 0)
+        c.rect(x - 4, 1, tw + 8, 9)
+        bold(x, 2, title)
+    elif style == "menubar":                     # old Mac menu bar: apple-ish mark + menus, current one inverted
+        c.hline(1, 10, W - 2)
+        for (yy, a, b) in ((2, 5, 7), (3, 4, 9), (4, 3, 10), (5, 3, 10), (6, 3, 10), (7, 4, 9), (8, 5, 8)):
+            for xx in range(a, b): c.set(xx, yy)
+        c.set(7, 1); c.set(8, 1)
+        x = 16
+        for i, m in enumerate(title.split()):
+            w = len(m) * 6 + 6
+            if i == 1: c.rect(x - 3, 1, w, 9, fill=True)
+            v = 0 if i == 1 else 1
+            c.text(x, 2, m, val=v); c.text(x + 1, 2, m, val=v)
+            x += w + 2
+    elif style == "tab":                         # folder tab with the title, baseline across
+        c.rect(1, 1, tw + 10, 10, fill=True)
+        c.text(6, 2, title, val=0); c.text(7, 2, title, val=0)
+        if right: c.text(W - 4 - 6 * len(right), 2, right)
+        c.hline(1, 10, W - 2)
+    else: raise ValueError(style)
+
+
+def screens_topbars(rom):
+    rows = [("MODULATION", ""), ("TEMPO", ""), ("LAB", ""), ("MIDI", ""), ("BOOT", ""), ("ABOUT", "")]
+    out = []
+    for name, style, title, right in (
+            ("A pinstripes (SP-808)", "pinstripe", "ROSETTA OS", ""),
+            ("B solid black bar", "inverse", "ROSETTA OS", "v0.2"),
+            ("C plain + rule, status right", "underline", "ROSETTA OS", "120 BPM"),
+            ("D dialog double rule", "double", "ROSETTA OS", ""),
+            ("E dither pattern + title box", "dither", "ROSETTA OS", ""),
+            ("F old Mac menu bar", "menubar", "Rosetta Mod Tempo Lab", ""),
+            ("G folder tab", "tab", "ROSETTA OS", "120 BPM")):
+        c = Canvas(rom); topbar(c, style, title, right)
+        mac_rows(c, rows, sel=0, arrows=True)
+        out.append((name, c))
+    return out
