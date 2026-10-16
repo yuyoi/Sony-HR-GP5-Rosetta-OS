@@ -66,5 +66,16 @@ ST0 = `010820`, ST1 = `000820` (status / mode words sent first).
 | **New DSP #2 effects** (reverb / long delay side) | needs DSP #2's instruction set reverse-engineered first (we have its code and the protocol) | high | medium |
 | Freeze / glitch / reverse | TMS57002 delay memory + H8 control | high | medium |
 
+## Rosetta LFO (v0.3, emulator-tested)
+- Hooks the 5 ms system tick (vector 0xC0 -> `lfo_isr` -> Sony's handler). Every 2nd tick: phase += rate,
+  wave (triangle / sine / square / saw / random), value = base + depth * wave, clamped to the parameter's range.
+- **Written into the DSP-current program (RAM 0x41280); Sony's own driver diffs it against 0x41330 and sends it**,
+  with Sony's own parameter scaling. base = the edit buffer (0x458A0), so SAVE never stores a modulated value.
+  Only writes when the value changes; switching off restores the original.
+- Target = block A-F + its n-th editable parameter, found through Sony's EDIT table (0x8044: descriptor + name).
+  Program blocks: A 0x3C, B 0x44, C 0x4C, D 0x5C, E 0x78, F 0x94; byte base+1 = effect type.
+- Heavy targets: some parameters (e.g. HALL reverb time) make Sony re-send ~1 KB to DSP #2 per change; modulate
+  those slowly. Rate is 0.05-15 Hz assuming a 5 ms tick (to calibrate on hardware).
+
 **Best first step:** a Rosetta modulation engine (LFO, tempo) driving coefficient updates. It needs no new DSP code,
 it reuses a path Sony already uses, and it gives every stock effect new life.

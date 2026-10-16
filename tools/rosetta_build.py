@@ -9,7 +9,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.2"
+VERSION = "0.3"
 PRESETS, PRESET_LEN = 0xB318, 0xB0
 INIT_FROM = 8                        # "Transparnt" becomes the single INIT program
 FREE0, FREE0_END = PRESETS + PRESET_LEN, 0xF7D8
@@ -32,6 +32,35 @@ def big_width(rom, text):
     return w
 
 
+BLOCKS = [(0x3C, 0x00), (0x44, 0x03), (0x4C, 0x0A), (0x5C, 0x0D), (0x78, 0x23), (0x94, 0x2B)]   # program offset, EDIT id base
+
+
+def edit_table_len(rom):
+    n = 0
+    while True:
+        e = 0x8044 + n * 8
+        p = (rom[e] << 8) | rom[e + 1]
+        name = rom[e + 2:e + 8]
+        if not (0x7000 <= p < 0xB000 and name[-1] == 0 and all(32 <= c < 127 for c in name[:name.index(0)])): return n
+        n += 1
+
+
+def gen_tables(rom):
+    """LFO rate table (0.05-15 Hz at a 100 Hz update), sine table, block table (offset, id base, type count)"""
+    import math
+    n = edit_table_len(rom)
+    bases = [b for o, b in BLOCKS] + [n]
+    rates = [round(0.05 * (15 / 0.05) ** (r / 99) * 65536 / 100) for r in range(100)]
+    sine = [round(127 * math.sin(2 * math.pi * i / 256)) & 0xFF for i in range(256)]
+    out = ["        .align 2", "rate_tab:"]
+    for i in range(0, 100, 10): out.append("        .dw     " + ", ".join(str(v) for v in rates[i:i + 10]))
+    out.append("sine_tab:")
+    for i in range(0, 256, 16): out.append("        .db     " + ", ".join(str(v) for v in sine[i:i + 16]))
+    out.append("blk_tab:")
+    for k, (o, b) in enumerate(BLOCKS): out.append("        .db     %d, %d, %d, 0" % (o, b, bases[k + 1] - b))
+    return "\n".join(out) + "\n"
+
+
 def build(out):
     rom = bytearray(open(anim_build.ROM_IN, "rb").read())
     assert hashlib.md5(rom).hexdigest() == anim_build.STOCK_MD5, "needs the stock Ver1.03E dump"
@@ -49,6 +78,8 @@ def build(out):
 
     # 3. ROSETTA code in the freed page-0 space
     src = open(os.path.join(ROOT, "src", "rosetta.asm"), encoding="utf-8").read()
+    src += "\n" + open(os.path.join(ROOT, "src", "lfo.asm"), encoding="utf-8").read()
+    src += "\n" + gen_tables(rom)
     a = Asm({"ROSETTA_BASE": ROSETTA_BASE, "BIG_COL": (38 - big_width(rom, "ROSETTA")) // 2})
     code = a.assemble(src)
     lo, hi = min(code), max(code)
@@ -58,6 +89,9 @@ def build(out):
     bad = a.check(bytes(rom), 0)
     assert not bad, bad
     sy = a.syms
+
+    # 3b. 5 ms system tick (vector 0xC0) -> lfo_isr, which then jumps on to Sony's handler
+    patch(rom, 0x00C0, "00 00 04 fd", bytes([0, 0, sy["lfo_isr"] >> 8, sy["lfo_isr"] & 0xFF]))
 
     # 4. SYSTEM:Select: B (CLOCK) -> ROSET, C (MEMRY) -> nothing yet
     patch(rom, 0x4840, "49 d0", bytes([sy["ros_entry"] >> 8, sy["ros_entry"] & 0xFF]))
@@ -72,6 +106,9 @@ def build(out):
     final = bytearray(open(out, "rb").read())
     with open(out[:-4] + "_rosetta.lst", "w", encoding="utf-8") as f:
         f.write(a.listing(bytes(final), 0) + "\n")
+    with open(out[:-4] + "_syms.txt", "w", encoding="utf-8") as f:
+        for k, v in sorted(sy.items(), key=lambda kv: kv[1]):
+            f.write("%05X %s\n" % (v, k))
     used = hi - lo + 1
     print("rosetta v%s: page-0 code %d B @%05X, page-0 free left %d B" % (VERSION, used, lo, FREE0_END - hi - 1))
     return final, sy

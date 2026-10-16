@@ -58,7 +58,7 @@ class Emu:
         s.fastloops = True
         s.strict = [(0x0B3C8, 0x0F7D8), (0x1F596, 0x20000)]   # Rosetta code + boot player: odd word access = bug
         s.odd_count = 0
-        s.ram_ok = {0x62E0}                     # Sony vars Rosetta may write on purpose (0x462E0 = "not in PLAY")
+        s.ram_ok = {0x62E0} | set(range(0x1280, 0x1330))   # Sony vars Rosetta may write: 0x462E0 "not in PLAY", 0x41280 DSP-current program (LFO)
         s.ramw = None                           # set of page-4 offsets written (RAM usage survey)
         s.dsplog = None                         # list of (port, value, icount) for FD00/FD10/FD11 writes
         s.frc_base = {}

@@ -173,13 +173,16 @@ class Asm:
             final = p >= 4
             s.out = {}; s.lst = []
             pc = 0
+            defined = set()
             for ln, raw in enumerate(lines, 1):
                 line = raw.split(";")[0].rstrip() if '"' not in raw else re.sub(r';(?=(?:[^"]*"[^"]*")*[^"]*$).*', "", raw).rstrip()
                 if not line.strip(): continue
                 m = re.match(r"\s*([A-Za-z_][\w\.]*):(.*)", line)
                 if m:
                     lab = m.group(1)
-                    if p == 0 and lab in s.syms and s.syms[lab] != pc and not lab.startswith("."): pass
+                    if lab in defined:
+                        raise AsmError("line %d: label %s defined twice" % (ln, lab))
+                    defined.add(lab)
                     s.syms[lab] = pc
                     line = m.group(2)
                     if not line.strip(): continue

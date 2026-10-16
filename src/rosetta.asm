@@ -1,4 +1,4 @@
-; Sony HR-GP5 Rosetta OS v0.2 - page-0 code in the freed factory-preset area (0xB3C8-0xF7D7).
+; Sony HR-GP5 Rosetta OS v0.3 - page-0 code in the freed factory-preset area (0xB3C8-0xF7D7).
 ; Assembled by tools/h85asm.py from tools/rosetta_build.py.
 ;
 ; Classic Mac page engine, folder-tab style (mockup G):
@@ -27,12 +27,22 @@
         .equ RV, 0x7000
         .equ V_MAGIC, RV+0x00            ; word 'RS'
         .equ V_BOOT, RV+0x02             ; Hex girl boot 0/1 (also read by the page-1 boot player)
+        .equ V_VER, RV+0x03              ; settings layout version (3 = v0.3)
         .equ V_LFO_WAVE, RV+0x04
         .equ V_LFO_RATE, RV+0x05
         .equ V_LFO_DEPTH, RV+0x06
-        .equ V_LFO_DEST, RV+0x07
+        .equ V_LFO_BLOCK, RV+0x07        ; 0..5 = blocks A-F
         .equ V_LFO_SYNC, RV+0x08
         .equ V_BPM, RV+0x09
+        .equ V_LFO_ON, RV+0x0A
+        .equ V_LFO_PARAM, RV+0x0B        ; n-th editable parameter of that block
+        .equ L_PHASE, RV+0x40            ; word, LFO state (src/lfo.asm)
+        .equ L_RND, RV+0x42              ; word, random generator
+        .equ L_LAST, RV+0x44             ; byte, program offset last modulated (0xFF = none)
+        .equ L_DIV, RV+0x45
+        .equ L_SCAN, RV+0x46             ; byte, scratch: numeric-param counter
+        .equ NAMEBUF, RV+0x50            ; "F HALL" composed here
+        .equ SETVER, 3
         .equ E_PAGE, RV+0x10             ; word: current page
         .equ E_SEL, RV+0x12
         .equ E_TOP, RV+0x13
@@ -49,6 +59,7 @@
         .equ K_LIST, 2
         .equ K_ACT, 3
         .equ K_INFO, 4
+        .equ K_DYN, 5                    ; ptr = RAM var, aux = routine: R1 = value -> R4 = text (EP set), R2 = max
 
         .org ROSETTA_BASE
 
@@ -57,8 +68,11 @@ ros_entry:
         LDC.B   #4,DP
         BSET.B  #0,@0x62E0               ; "not in PLAY", like the SYSTEM screens
         CMP.W   #MAGIC,@V_MAGIC
-        BEQ     re1
+        BEQ     re0
         JSR     @ros_defaults
+re0:    CMP.B   #SETVER,@V_VER           ; settings from an older Rosetta: add the new ones
+        BEQ     re1
+        JSR     @ros_defaults_v3
 re1:    MOV.W   #pg_root,R0
         MOV.W   R0,@E_PAGE
         CLR.B   @E_SEL
@@ -90,12 +104,17 @@ ros_bypass:
 ros_defaults:                            ; DP = 4
         MOV.W   #MAGIC,@V_MAGIC
         MOV.B   #1,@V_BOOT
-        MOV.B   #0,@V_LFO_WAVE
-        MOV.B   #20,@V_LFO_RATE
-        MOV.B   #30,@V_LFO_DEPTH
-        MOV.B   #0,@V_LFO_DEST
-        MOV.B   #0,@V_LFO_SYNC
         MOV.B   #120,@V_BPM
+ros_defaults_v3:
+        MOV.B   #0,@V_LFO_ON
+        MOV.B   #0,@V_LFO_WAVE
+        MOV.B   #40,@V_LFO_RATE
+        MOV.B   #50,@V_LFO_DEPTH
+        MOV.B   #5,@V_LFO_BLOCK
+        MOV.B   #0,@V_LFO_PARAM
+        MOV.B   #0,@V_LFO_SYNC
+        MOV.B   #0xFF,@L_LAST
+        MOV.B   #SETVER,@V_VER
         RTS
 
 ; ================= keys =================
@@ -216,8 +235,23 @@ dial_edit:
         BPL     de1
         CLR.W   R2
 de1:    CLR.W   R3
-        MOV.B   @(3,R5),R3               ; max
-        CMP.W   R3,R2
+        MOV.B   @(2,R5),R1
+        CMP.B   #K_DYN,R1
+        BNE     de1b
+        MOV.W   R2,@-SP                  ; K_DYN: ask the routine for max
+        MOV.W   R0,@-SP
+        MOV.W   R5,@-SP
+        CLR.W   R1
+        MOV.W   @(6,R5),R3
+        JSR     @R3
+        LDC.B   #0,EP
+        MOV.W   R2,R3
+        MOV.W   @SP+,R5
+        MOV.W   @SP+,R0
+        MOV.W   @SP+,R2
+        BRA     de1c
+de1b:   MOV.B   @(3,R5),R3               ; max
+de1c:   CMP.W   R3,R2
         BLE     de2
         MOV.W   R3,R2
 de2:    MOV.B   R2,@R0
@@ -374,7 +408,11 @@ value_str:
         CLR.W   R1
         MOV.B   @R3,R1
         MOV.B   @(2,R5),R2
-        CMP.B   #K_LIST,R2
+        CMP.B   #K_DYN,R2
+        BNE     vs0
+        MOV.W   @(6,R5),R3               ; K_DYN routine: R1 = value -> R4 = text, EP set
+        JMP     @R3
+vs0:    CMP.B   #K_LIST,R2
         BNE     vs1
         MOV.W   @(6,R5),R4               ; names table
         SHLL.W  R1
@@ -592,8 +630,9 @@ dsc9:   RTS
 ; ================= pages =================
 s_gt:   .asciz  ">"
 s_dots: .asciz  "..."
-s_ver:  .asciz  "v0.2"
+s_ver:  .asciz  "v0.3"
 s_soon: .asciz  "SOON"
+s_lfo1: .asciz  "LFO 1"
 
         .align 2
 pg_root:
@@ -613,8 +652,17 @@ pg_root:
         .dw     pg_about, 0
 
 pg_mod:
-        .dw     t_mod, s_soon
-        .db     5, 0
+        .dw     t_mod, s_lfo1
+        .db     6, 0
+        .dw     l_lfo
+        .db     K_LIST, 1
+        .dw     V_LFO_ON, n_offon
+        .dw     l_block
+        .db     K_DYN, 5
+        .dw     V_LFO_BLOCK, dyn_block
+        .dw     l_param
+        .db     K_DYN, 0
+        .dw     V_LFO_PARAM, dyn_param
         .dw     l_wave
         .db     K_LIST, 4
         .dw     V_LFO_WAVE, n_waves
@@ -624,12 +672,6 @@ pg_mod:
         .dw     l_depth
         .db     K_NUM, 99
         .dw     V_LFO_DEPTH, 0
-        .dw     l_dest
-        .db     K_LIST, 3
-        .dw     V_LFO_DEST, n_dests
-        .dw     l_sync
-        .db     K_LIST, 1
-        .dw     V_LFO_SYNC, n_offon
 
 pg_tempo:
         .dw     t_tempo, s_soon
@@ -662,7 +704,6 @@ pg_about:
         .dw     0, v_base
 
 n_waves: .dw    w_tri, w_sine, w_square, w_saw, w_random
-n_dests: .dw    d_dly, d_chorus, d_filter, d_level
 n_offon: .dw    o_off, o_on
 
 t_root:   .asciz "ROSETTA OS"
@@ -675,17 +716,18 @@ l_tempo:  .asciz "TEMPO"
 l_boot:   .asciz "BOOT"
 l_about:  .asciz "ABOUT"
 l_wave:   .asciz "WAVE"
+l_lfo:    .asciz "LFO"
+l_block:  .asciz "BLOCK"
+l_param:  .asciz "PARAM"
 l_rate:   .asciz "RATE"
 l_depth:  .asciz "DEPTH"
-l_dest:   .asciz "DEST"
-l_sync:   .asciz "SYNC"
 l_bpm:    .asciz "BPM"
 l_hexgirl: .asciz "HEX GIRL"
 l_os:     .asciz "OS"
 l_by:     .asciz "BY"
 l_mascot: .asciz "MASCOT"
 l_base:   .asciz "BASE"
-v_os:     .asciz "ROSETTA 0.2"
+v_os:     .asciz "ROSETTA 0.3"
 v_by:     .asciz "JSW + CLAUDE"
 v_mascot: .asciz "HEX GIRL"
 v_base:   .asciz "SONY 1.03E"
@@ -694,9 +736,5 @@ w_sine:   .asciz "SINE"
 w_square: .asciz "SQUARE"
 w_saw:    .asciz "SAW"
 w_random: .asciz "RANDOM"
-d_dly:    .asciz "DLY TIME"
-d_chorus: .asciz "CHORUS"
-d_filter: .asciz "FILTER"
-d_level:  .asciz "LEVEL"
 o_off:    .asciz "OFF"
 o_on:     .asciz "ON"
