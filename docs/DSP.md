@@ -188,3 +188,33 @@ Steps: (1) `tms57asm.py` (from `tmsinstr.lst` encodings, round-trip through `tms
 the MAME semantics incl. delay RAM and coefficient updates), checked on Sony's captured program; (2) a KEYS program
 generator + rendered WAV tests; (3) H8 side: program upload, gate Sony's TMS writes, a Rosetta KEYS page that plays test
 notes from the panel, first hardware burn; (4) MIDI note-on hook; (5) oscillators, filter, envelopes, LFO, ARP.
+
+## DDS-DSP SAMPLER (Rosetta 0.4.0, HR-MP5 build, emulator-tested 2026-10-17)
+Steps 1-3 and most of 5 are done. Files: `tools/tms57sim.py` (simulator + assembler), `tools/keysdsp.py` (program
+generator, scheduler, linker, self-test, H8 tables), `src/keys.asm` (page, H8 driver, gates).
+- **Simulator** (`tms57sim.py --selftest`): Sony's 256-word program round-trips through the assembler; Sony's GP5 and MP5
+  programs run in it with sane outputs (MP5 boot patch: so0 = 0.5 si0 + 1.0 si1, so1 = si1). Instructions MAME leaves empty
+  but Sony uses: `zacc` (a = 0), `dos` (so = data word).
+- **Program** (251 of 256 words, 4 voices): per voice PH += DL, X = AGE - PH, two delay-RAM reads at int(X) / int(X) + 1
+  (address stored and used in one word: `rde c*+ ; smhc c*+`), linear interpolation, saw = PH << 10 (root fs / 64), pulse =
+  sign(PWT - tri) (width), tri = 0.5 - |saw|, layer mix, one-pole envelope LVL += K (T - LVL), pan L / R; stereo
+  Chamberlin SVF (separate -q and -f coefficients so both stay in Q31), THRU = Sony's own so0 mix, so1 = si1, `lpc` of
+  |out L| every sample. Record: read-modify-write of the slot at xoa 0 (REC 0 = untouched), source = G0..G3 inputs + GS sine.
+  Boot: REC = 1, GS = 0.5 -> a 64-sample sine fills the RAM (1024 exact periods: loops seamlessly).
+- **Scheduler**: every once-per-sample coefficient is a `c*+` stream slot placed by the linker in program order (frees the
+  word's direct-address slot for data); threads claim A / M / RAM port / pointers as a closure (no deadlock); a few hundred
+  deterministic priority orders, the shortest kept. Checks: MAC results read 2 words later, delay-RAM accesses 4 words
+  apart, `srbd` before the next read, no access in the last 5 words.
+- **Self-test** (`keysdsp.py --test`): root 689.1 Hz, +12 / +7 exact, L = R at centre, release to silence, saw / pulse /
+  triangle levels, 300 Hz low-pass, 3-voice chord, THRU and so1 bit-exact, lpc armed.
+- **H8 side**: entering the page sets K_OWN, uploads ST0 / ST1 / program (PLOAD kept on, so the DSP waits) then all 256
+  coefficients (Sony's 0x14690 / 0x1467D through page-1 stubs `KST_PL` / `KST_CL`), then sends every setting. Sony's 5 TMS
+  entries (0x14755, 0x146DC, 0x1468B, 0x14678, 0x13E43 meter read) start with `MOV.B #4,@FD10` and are patched to `PJMP gate_*`:
+  K_OWN = 1 -> skip (the meter read skips to Sony's own `CLR R4 ; CLR R5 ; RTS` at 0x13E37). Leaving the page flips the 4
+  structure bytes (0x39 / 0x4B / 0x75 / 0x87, Sony's tables at 0x14D6A) in Sony's DSP-side copy 0x41330, so Sony's
+  program-change sequence reloads its own TMS program.
+- **Emulator test** (`rosetta_build.py mp5`): program + coefficient images arrive byte-exact; PLAY -> the H8's writes,
+  replayed into the simulator, play 689.1 Hz; Sony's meter reads (258) and coefficient writes (18, provoked by changing
+  program bytes) are gated, no stray writes; leaving the page reloads Sony's program word-for-word.
+- Not yet: MIDI notes, the GP5 build (two copies of each TMS routine there), sample-rate check on hardware (all pitches
+  assume 44.1 kHz; ROOT corrects the sample, not the oscillators), more voices (the scheduler wastes ~30 words in MAC waits).

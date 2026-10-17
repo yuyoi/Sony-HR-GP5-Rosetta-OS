@@ -18,3 +18,16 @@
         .equ LFO_DEF_BLOCK, 3            ; EFCT2
         .equ HAS_MSRC, 0                 ; c(05) not verified in the MP5 DSP program: no SOURCE row, no writes
         .equ INPUT_ROWS, 4
+        .equ HAS_KEYS, 1                 ; DDS-DSP SAMPLER (src/keys.asm): Sony TMS57002 routine addresses below
+        .equ SONY_CW_CONT, 0x1475A       ; 0x14755 coefficient write (R1, R4:R5), after its MOV.B #4,@FD10
+        .equ SONY_CW_SKIP, 0x14791       ;   its RTS
+        .equ SONY_CW2_CONT, 0x146E1      ; 0x146DA coefficient write (FE05 / FE06 / FE08)
+        .equ SONY_CW2_SKIP, 0x14722      ;   MOV.W @SP+,R0 ; RTS
+        .equ SONY_PL_CONT, 0x14690       ; 0x1468B program load (PLOAD), EP:R5 data, FP = count - 1
+        .equ SONY_CL_CONT, 0x1467D       ; 0x14678 coefficient-memory load (PLOAD + CLOAD)
+        .equ SONY_LD_SKIP, 0x146D0       ;   their RTS
+        .equ SONY_MR_CONT, 0x13E48       ; 0x13E43 meter read (waits for TMS57002 host data)
+        .equ SONY_MR_SKIP, 0x13E37       ;   Sony's own skip: CLR R4, CLR R5, RTS
+        .equ KST_CW, 0x1FFB8             ; page-1 stubs past the gates (tools/rosetta_build.py writes them)
+        .equ KST_PL, 0x1FFC2
+        .equ KST_CL, 0x1FFCC

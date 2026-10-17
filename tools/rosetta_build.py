@@ -11,7 +11,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.3.5"
+VERSION = "0.4.0"
 PRESET_LEN = 0xB0
 
 # Everything model-specific. GP5 = HR-GP5 Ver1.03E (EPROM GP5-E1), MP5 = HR-MP5 Ver1.11 (dump rom1_11j).
@@ -40,8 +40,23 @@ PLATFORMS = {
         blocks=[(0x38, 0x00), (0x4A, 0x02), (0x74, 0x1F), (0x86, 0x21)],             # EQ1, EFCT1, EQ2, EFCT2
         base_text="SONY MP5 1.11",
         play_entry=0x7069,
-        anim=dict(hook=0x2576, hook_orig=bytes.fromhex("18 10 37 04 04 8d"), player=None, limit=0xFD00)),
+        anim=dict(hook=0x2576, hook_orig=bytes.fromhex("18 10 37 04 04 8d"), player=None, limit=0xFD00),
+        keys=dict(stubs=[(0x1FFB8, "15 fd 10 06 04 18 47 5a 11 19"),                # KST_CW: FD10 = 4, JSR @0x475A, PRTS
+                         (0x1FFC2, "15 fd 10 06 04 18 46 90 11 19"),                # KST_PL: program load (PLOAD stays on)
+                         (0x1FFCC, "15 fd 10 06 04 18 46 7d 18 46 d1 11 19")],      # KST_CL: + coefficients, release
+                  gates=[(0x14755, "gate_cw"), (0x146DC, "gate_cw2"), (0x1468B, "gate_pl"), (0x14678, "gate_cl"),
+                         (0x13E43, "gate_mr")])),
 }
+KEYS_ITEM = """        .dw     l_keys
+        .db     K_SUB, 0
+        .dw     pg_keys, 0
+"""
+
+
+def root_key(k, model):
+    """root-menu row keys: the MP5 root has DDS-DSP SAMPLER as row A, the rest one row down"""
+    if model in PLATFORMS and "keys" in PLATFORMS[model] and k in "ABCDE": return chr(ord(k) + 1)
+    return k
 
 
 def patch(rom, addr, old, new):
@@ -111,9 +126,18 @@ def build(out, model="gp5"):
     src = open(os.path.join(ROOT, "src", pf["src"]), encoding="utf-8").read()
     ros = open(os.path.join(ROOT, "src", "rosetta.asm"), encoding="utf-8").read()
     ros = ros.replace('v_base:   .asciz "SONY 1.03E"', 'v_base:   .asciz "%s"' % pf["base_text"])
+    has_keys = "keys" in pf
+    ros = ros.replace(";@KEYS_ITEM\n", KEYS_ITEM if has_keys else "")
+    src += "\n        .equ ROOT_N, %d\n" % (6 if has_keys else 5)
     src += "\n" + ros
     src += "\n" + open(os.path.join(ROOT, "src", "lfo.asm"), encoding="utf-8").read()
     src += "\n" + open(os.path.join(ROOT, "src", "inputtest.asm"), encoding="utf-8").read()
+    if has_keys:                                                     # DDS-DSP SAMPLER (src/keys.asm + tools/keysdsp.py)
+        import keysdsp
+        src += "\n" + open(os.path.join(ROOT, "src", "keys.asm"), encoding="utf-8").read()
+        src += "\n" + keysdsp.gen_asm(keysdsp.Image(platform=model), model)
+    else:
+        src += "\nkeys_apply:\nkeys_tick:\n        RTS\n"
     src += "\n" + gen_tables(rom, pf)
     big_col = (38 - big_width(rom, "ROSETTA")) // 2 if model == "gp5" else 0
     a = Asm({"ROSETTA_BASE": pf["rosetta_base"], "BIG_COL": big_col})
@@ -128,6 +152,14 @@ def build(out, model="gp5"):
 
     # 3a. page-1 stub so page-0 Rosetta can PJSR Sony's live-coefficient routine (it ends in RTS, not PRTS)
     patch(rom, sy["CWRITE_P1"], "ff ff ff ff ff", pf["cwrite_stub"])
+
+    # 3a1. DDS-DSP SAMPLER: page-1 stubs past the gates, Sony's TMS57002 routine entries -> gate_* (PJMP, page 0)
+    if has_keys:
+        for addr, code in pf["keys"]["stubs"]:
+            n = len(bytes.fromhex(code))
+            patch(rom, addr, b"\xff" * n, code)
+        for addr, lab in pf["keys"]["gates"]:
+            patch(rom, addr, "15 fd 10 06 04", bytes([0x13, 0x00, sy[lab] >> 8, sy[lab] & 0xFF, 0x00]))
 
     # 3a2. CPU A/D: Sony scans AN0-AN1 (battery, pedal); scan AN0-AN3 so AN2/AN3 can be the raw L/R input meters
     patch(rom, 0x0208, "15 ff e8 06 31", "15 ff e8 06 33")         # MOV.B #0x33,@ADCSR
@@ -184,10 +216,10 @@ def emu_tour(img, shots, model="gp5"):
     def snap(name):
         p = os.path.join(shots, name + ".png"); e.png(p); out.append((name, e.text().splitlines()))
     steps = [("SYSTEM", None), ("B", "01_root"), ("dial+1", "02_root_tempo"), ("dial+5", "03_root_about_scroll"),
-             ("D", "04_boot_page"), ("EDIT", "05_boot_edit"), ("dial-1", "06_boot_off"), ("EXIT", "07_boot_edit_off"),
-             ("EXIT", "08_back_root"), ("A", "09_mod"), ("dial+1", None), ("EDIT", "10_mod_rate_edit"),
+             (root_key("D", model), "04_boot_page"), ("EDIT", "05_boot_edit"), ("dial-1", "06_boot_off"), ("EXIT", "07_boot_edit_off"),
+             ("EXIT", "08_back_root"), (root_key("A", model), "09_mod"), ("dial+1", None), ("EDIT", "10_mod_rate_edit"),
              ("dial+7", "11_rate_27"), ("EXIT", None), ("dial+3", "12_mod_scrolled"), ("EXIT", None),
-             ("E", "13_about"), ("EXIT", None), ("C", "15_input"), ("E", "15b_input_source"), ("dial-1", "16_input_src_si0"),
+             (root_key("E", model), "13_about"), ("EXIT", None), (root_key("C", model), "15_input"), ("E", "15b_input_source"), ("dial-1", "16_input_src_si0"),
              ("EXIT", None), ("EXIT", None), ("EXIT", "14_back_to_system")]
     for k, name in steps:
         if k.startswith("dial"): e.dial(int(k[4:]), 150000)
@@ -221,7 +253,7 @@ def emu_input_test(img, model="gp5"):
     e = new_emu(img, model); e.run(1_500_000)
     assert e.rom[0x020C] == 0x33, "A/D scan AN0-AN3 patch missing"
     e.dsplog = []
-    for k in ("SYSTEM", "B", "C"): e.press(k)            # ROSETTA -> INPUT
+    for k in ("SYSTEM", "B", root_key("C", model)): e.press(k)   # ROSETTA -> INPUT
     swing = [0x40, 0xC0]                                 # AN2: p-p 0x80 -> ~19 segments; AN3 constant -> 0
     for i in range(40):
         e.adc[0xFFE4] = swing[i & 1]; e.adc[0xFFE6] = 0x80
@@ -242,6 +274,70 @@ def emu_input_test(img, model="gp5"):
     return lv, ups
 
 
+def emu_keys_test(img, model, sy):
+    """DDS-DSP SAMPLER end to end: open the page -> our program + coefficients go to the TMS57002 (Sony's writers gated),
+    PLAY on -> the H8's coefficient writes, replayed into tools/tms57sim.py, play the boot sine at fs / 64; leaving the
+    page -> Sony's program-change sequence reloads Sony's own TMS57002 program."""
+    import dsplog, keysdsp, tms57sim, math
+    im = keysdsp.Image(platform=model)
+    e = new_emu(img, model); e.run(1_500_000)
+    e.dsplog = []
+    mark = []
+    skips = {sy[l]: l for l in ("gcw1", "gcx1", "gpl1", "gcl1", "gmr1")}
+    hits = {}
+    def tr(em, pc):
+        if pc == sy["kld_done"] and not mark: mark.append(len(em.dsplog))
+        if pc in skips: hits[skips[pc]] = hits.get(skips[pc], 0) + 1
+    e.trace = tr
+    for k in ("SYSTEM", "B", "A"): e.press(k)                        # ROSETTA -> DDS-DSP SAMPLER
+    assert (e.ram[0x7010] << 8 | e.ram[0x7011]) == sy["pg_keys"], "not on the DDS-DSP SAMPLER page"
+    assert e.ram[0x70A0] == 1 and mark, "K_OWN not set / program not loaded"
+    tms, _ = dsplog.decode(e.dsplog[:mark[0]])
+    assert tms.st0 == keysdsp.ST0 and tms.st1 == keysdsp.ST1, (hex(tms.st0 or 0), hex(tms.st1 or 0))
+    assert tms.prog[:len(im.prog)] == im.prog, "program image differs"
+    assert all(tms.cmem.get(i, 0) == im.cmem[i] for i in range(256)), "coefficient image differs"
+    e.press("EDIT"); e.dial(1, 150000); e.press("EXIT")              # PLAY -> ON
+    for i in range(40):                                              # attack -> decay switch in keys_tick, and
+        if i in (5, 15, 25):                                         # Sony parameter changes (as the LFO does): gated
+            for o in (0x3A, 0x3C, 0x4C, 0x4E, 0x76, 0x8A): e.ram[0x1280 + o] ^= 0x03
+        e.run(20000)
+    tms2, _ = dsplog.decode(e.dsplog)
+    assert tms2.loads == tms.loads, "a program load while KEYS owns the DSP"
+    assert hits.get("gmr1", 0) > 0 and hits.get("gcw1", 0) + hits.get("gcx1", 0) > 0, "gates never hit: %s" % hits
+    # replay into the simulator: our image, the boot sine fills the RAM, then every H8 update after the load
+    after = tms2.updates[len(tms.updates):]
+    import re as _re
+    host = set()
+    for n in set(im.cslot.values()) | set(im.cadr):
+        if _re.fullmatch(r"(DL|PH|T|K|SL|AL|PL|TL|PWT|PANL|PANR)\d|FF[12][LR]|FM[FQ][LR]|WET[LR]|DRY[LR]|TH[01][LR]|G[0-3]|GS|REC|AMASK", n):
+            host.update(im.addrs(n))
+    stray = sorted(set(a for a, v in after) - host)
+    assert not stray, "writes to non-parameter coefficients while KEYS owns the DSP (gate leak): %s" % stray
+    t = tms57sim.TMS(); t.load(tms.st0, tms.st1, tms.prog, [tms.cmem.get(i, 0) for i in range(256)])
+    for _ in range(66000): t.sample()
+    for a, v in after:
+        t.host_update(a, v); t.sample(); t.sample()
+    y = []
+    for _ in range(6000): y.append(t.sample()[0])
+    y = [v - (1 << 24) if v & 0x800000 else v for v in y[2000:]]
+    z = [i for i in range(1, len(y)) if y[i - 1] < 0 <= y[i]]
+    f = (len(z) - 1) / ((z[-1] - z[0]) / 44100.0) if len(z) > 2 else 0
+    rms = math.sqrt(sum(v * v for v in y) / len(y)) / 0x800000
+    assert abs(f - 44100 / 64) < 2 and rms > 0.05, (f, rms)
+    # leave the page: K_OWN off, Sony reloads its program
+    mark = len(e.dsplog)
+    e.press("EXIT")
+    for _ in range(100): e.run(20000)
+    assert e.ram[0x70A0] == 0, "K_OWN still set"
+    tms3, _ = dsplog.decode(e.dsplog)
+    assert tms3.loads > tms2.loads, "Sony did not reload its TMS57002 program"
+    e0 = new_emu(img, model); e0.dsplog = []; e0.run(1_500_000)
+    ref, _ = dsplog.decode(e0.dsplog)
+    assert tms3.prog == ref.prog, "Sony's program after KEYS differs from the boot program"
+    return dict(our_updates=len(after), gated=hits, pitch=round(f, 1), rms=round(rms, 3),
+                sony_reload_words=len(tms3.prog))
+
+
 if __name__ == "__main__":
     model = sys.argv[1] if len(sys.argv) > 1 else "gp5"
     out = os.path.join(ROOT, "build", PLATFORMS[model]["out"])
@@ -253,4 +349,6 @@ if __name__ == "__main__":
     print("boots into ROSETTA, EXIT stays:", emu_boots_into_rosetta(bytes(img), model, sy))
     lv, ups = emu_input_test(bytes(img), model)
     print("INPUT page: ADC L/R segments", lv, " c(05) sent:", " ".join("%02X" % u for u in ups))
+    if "keys" in PLATFORMS[model]:
+        print("DDS-DSP SAMPLER:", emu_keys_test(bytes(img), model, sy))
     print("x4 md5", hashlib.md5(open(out[:-4] + "_SST39SF040_x4.bin", "rb").read()).hexdigest())

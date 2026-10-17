@@ -17,3 +17,4 @@
         .equ LFO_DEF_BLOCK, 5            ; F (HALL)
         .equ HAS_MSRC, 1                 ; DSP meter SOURCE (c(05) = meter pointer, verified in the GP5 DSP program)
         .equ INPUT_ROWS, 5
+        .equ HAS_KEYS, 0                 ; DDS-DSP SAMPLER is MP5-only so far (the GP5 has two copies of the TMS routines)

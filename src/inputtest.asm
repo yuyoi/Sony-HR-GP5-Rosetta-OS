@@ -140,6 +140,7 @@ al1:    MOV.W   R3,@-SP
 
 ; k_idle: no key, no dial. On the INPUT page sample AN2/AN3 every pass and redraw the meters every 8 ticks.
 k_idle:
+        JSR     @keys_tick               ; DDS-DSP SAMPLER: envelope / recording timers
         LDC.B   #4,DP
         LDC.B   #0,EP
         MOV.W   @E_PAGE,R5

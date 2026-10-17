@@ -74,6 +74,7 @@ re1:    MOV.W   #pg_root,R0
         JSR     @in_reset                ; INPUT TEST: both ADC channels on
 redraw_loop:
         JSR     @in_apply                ; INPUT TEST: send a changed mute to the DSP
+        JSR     @keys_apply              ; DDS-DSP SAMPLER: own the DSP on its page, send changed settings
         JSR     @ros_draw
 ros_loop:
         JSR     @ui_poll_a
@@ -632,14 +633,15 @@ dsc9:   RTS
 ; ================= pages =================
 s_gt:   .asciz  ">"
 s_dots: .asciz  "..."
-s_ver:  .asciz  "v0.3.5"
+s_ver:  .asciz  "v0.4.0"
 s_soon: .asciz  "SOON"
 s_lfo1: .asciz  "LFO 1"
 
         .align 2
 pg_root:
         .dw     t_root, s_ver
-        .db     5, 0
+        .db     ROOT_N, 0
+;@KEYS_ITEM
         .dw     l_mod
         .db     K_SUB, 0
         .dw     pg_mod, 0
@@ -763,7 +765,7 @@ l_os:     .asciz "OS"
 l_by:     .asciz "BY"
 l_mascot: .asciz "MASCOT"
 l_base:   .asciz "BASE"
-v_os:     .asciz "ROSETTA 0.3.5"
+v_os:     .asciz "ROSETTA 0.4.0"
 v_by:     .asciz "JSW + CLAUDE"
 v_mascot: .asciz "HEX GIRL"
 v_base:   .asciz "SONY 1.03E"
