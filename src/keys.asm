@@ -1,21 +1,22 @@
 ; ================= DDS-DSP SAMPLER (HR-MP5 build) =================
-; Our own TMS57002 program (tools/keysdsp.py: 4 voices, one sample in the delay RAM, saw / pulse / triangle layers,
-; envelopes, stereo pan, stereo resonant filter, THRU) owns the DSP while this page is open.
+; Our own TMS57002 program (tools/keysdsp.py: 8 voices playing the delay RAM, which holds a 64-sample wavetable from
+; one DDS oscillator (SYNTH) or a recording of the input (SAMPLE); envelopes, L / R voice groups with crossfeed,
+; stereo resonant filter, THRU) owns the DSP while this page is open.
 ; Sony's TMS57002 writers are gated meanwhile (their page-1 entries jump to gate_* below); ours go past the gates
 ; through page-1 stubs (KST_CW / KST_PL / KST_CL). Leaving the page makes Sony's DSP-side copy of the program
 ; structure stale, so Sony's own program-change sequence reloads its TMS57002 program.
-; Panel test: PLAY = hold the chord, NOTE / ROOT retune live. The sample is a 64-sample sine (fs / 64) until RECORD.
+; Panel test: PLAY = hold the chord, NOTE / ROOT retune live. At load: SYNTH with a sine.
 
         .equ K_SET, RV+0x80              ; settings, in kh_tab order
         .equ K_PLAY, K_SET+0
         .equ K_NOTE, K_SET+1
         .equ K_CHORD, K_SET+2
-        .equ K_SRC, K_SET+3
-        .equ K_SMP, K_SET+4
+        .equ K_MODE, K_SET+3             ; 0 SYNTH, 1 SAMPLE
+        .equ K_SINE, K_SET+4
         .equ K_SAW, K_SET+5
         .equ K_PUL, K_SET+6
         .equ K_PW, K_SET+7
-        .equ K_TRI, K_SET+8
+        .equ K_SRC, K_SET+8              ; 0 INPUT A (si0 L), 1 INPUT B (si1 L)
         .equ K_ATK, K_SET+9
         .equ K_DEC, K_SET+10
         .equ K_SUS, K_SET+11
@@ -23,30 +24,32 @@
         .equ K_CUT, K_SET+13
         .equ K_RES, K_SET+14
         .equ K_SPR, K_SET+15
-        .equ K_THRU, K_SET+16
-        .equ K_ROOT, K_SET+17
-        .equ KS_N, 18
-        .equ K_MAGIC, RV+0x92            ; 0x4B once the defaults are in
+        .equ K_VOL, K_SET+16
+        .equ K_THRU, K_SET+17
+        .equ K_ROOT, K_SET+18
+        .equ KS_N, 19
+        .equ K_MAGIC, RV+0x93            ; 0x4C once the defaults are in (layout 2)
         .equ K_OWN, RV+0xA0              ; 1 = our program is in the TMS57002, Sony's writers are gated
         .equ K_LASTT, RV+0xA1            ; L_TICK at the last keys_tick
         .equ K_RECN, RV+0xA2             ; word: 5 ms ticks of recording left (0 = not recording)
-        .equ K_VST, RV+0xA4              ; 4 bytes: voice state 0 off, 1 attack, 2 decay / sustain, 3 release
-        .equ K_VT, RV+0xA8               ; 4 words: attack ticks left
-        .equ K_SENT, RV+0xB0             ; KS_N bytes: value last sent (0xFF = send again)
-        .equ K_TMP, RV+0xC4              ; word scratch
+        .equ K_VST, RV+0xA4              ; 8 bytes: voice state 0 off, 1 attack, 2 decay / sustain, 3 release
+        .equ K_VT, RV+0xAC               ; 8 words: attack ticks left
+        .equ K_SENT, RV+0xBC             ; KS_N bytes: value last sent (0xFF = send again)
+        .equ K_TMP, RV+0xD0              ; 2 words scratch
         .equ DSPCOPY, 0x1330             ; Sony's DSP-side copy of the program (page 4)
         .equ REC_TICKS, 300              ; 65536 samples = 1.49 s at 44.1 kHz
+        .equ LVLMAX, 0x4000              ; a voice's full level (0.5: 4 voices per side without clipping)
 
 keys_defaults:                           ; DP = 4
         MOV.B   #0,@K_PLAY
-        MOV.B   #77,@K_NOTE              ; F5 = the boot sine's own pitch (fs / 64 = 689 Hz)
+        MOV.B   #77,@K_NOTE              ; F5 = the wavetable's own pitch (fs / 64 = 689 Hz)
         MOV.B   #0,@K_CHORD
-        MOV.B   #0,@K_SRC
-        MOV.B   #99,@K_SMP
+        MOV.B   #0,@K_MODE
+        MOV.B   #99,@K_SINE
         MOV.B   #0,@K_SAW
         MOV.B   #0,@K_PUL
         MOV.B   #50,@K_PW
-        MOV.B   #0,@K_TRI
+        MOV.B   #1,@K_SRC
         MOV.B   #10,@K_ATK
         MOV.B   #40,@K_DEC
         MOV.B   #99,@K_SUS
@@ -54,15 +57,16 @@ keys_defaults:                           ; DP = 4
         MOV.B   #99,@K_CUT
         MOV.B   #0,@K_RES
         MOV.B   #50,@K_SPR
+        MOV.B   #99,@K_VOL
         MOV.B   #99,@K_THRU
         MOV.B   #77,@K_ROOT
-        MOV.B   #0x4B,@K_MAGIC
+        MOV.B   #0x4C,@K_MAGIC
         RTS
 
 ; ---- redraw_loop: load / unload with the page, then send what changed ----
 keys_apply:
         LDC.B   #4,DP
-        CMP.B   #0x4B,@K_MAGIC
+        CMP.B   #0x4C,@K_MAGIC
         BEQ     kap0
         JSR     @keys_defaults
 kap0:   MOV.W   @E_PAGE,R0
@@ -98,8 +102,8 @@ kap4:   ADD.W   #1,R6
 kap9:   RTS
 
         .align 2
-kh_tab: .dw     kh_play, kh_note, kh_chord, kh_src, kh_smp, kh_saw, kh_pul, kh_pw, kh_tri
-        .dw     kh_none, kh_none, kh_sus, kh_rel, kh_filt, kh_filt, kh_spr, kh_thru, kh_note
+kh_tab: .dw     kh_play, kh_note, kh_chord, kh_mode, kh_wave, kh_wave, kh_wave, kh_pw, kh_none
+        .dw     kh_none, kh_none, kh_sus, kh_rel, kh_filt, kh_filt, kh_vol, kh_vol, kh_thru, kh_note
 
 ; ---- helpers (DP = 4 in and out) ----
 ; kcw: R1 = coefficient address, R4:R5 = value. Interrupts off meanwhile (the tick talks to DSP #2 on the same port).
@@ -153,35 +157,72 @@ neg32:  NOT.W   R4                       ; R4:R5 = -R4:R5
         ADD.W   #1,R4
 ng1:    RTS
 
+; mulq: R4 = Q15 (hi word of a Q31), R3 = Q15 -> R4:R5 = their product as Q31
+mulq:   MULXU.W R3,R4
+        SHLL.W  R5
+        ROTXL.W R4
+        RTS
+
 kh_none: RTS
 
-; ---- levels: one table value to 4 voice copies ----
-kh_smp: MOV.W   #K_SMP,R0
-        MOV.W   #KA_SL,R3
-        BRA     klvl
-kh_saw: MOV.W   #K_SAW,R0
-        MOV.W   #KA_AL,R3
-        BRA     klvl
-kh_pul: MOV.W   #K_PUL,R0
-        MOV.W   #KA_PL,R3
-        BRA     klvl
-kh_tri: MOV.W   #K_TRI,R0
-        MOV.W   #KA_TL,R3
-klvl:   MOV.W   R3,@K_TMP
+; ---- the wavetable mix (SYNTH) and the record mix ----
+kh_wave:                                 ; SYNTH: RGS / RGW / RGP = level / 2; SAMPLE: all 0
+        MOV.W   #KA_RGWAVE,R2
+        MOV.W   R2,@K_TMP
+        MOV.W   #K_SINE,R0
+kw1:    MOV.W   R0,@K_TMP+2
+        CLR.W   R4
+        CLR.W   R5
+        TST.B   @K_MODE
+        BNE     kw2
         MOV.W   #kt_lvl,R2
         JSR     @lk_set
-        MOV.W   @K_TMP,R2
-        MOV.W   #4,R3
-        JMP     @ksend_n
+        SHAR.W  R4
+        ROTXR.W R5
+kw2:    MOV.W   @K_TMP,R2
+        LDC.B   #0,DP
+        MOV.B   @R2+,R1
+        LDC.B   #4,DP
+        MOV.W   R2,@K_TMP
+        JSR     @kcw
+        MOV.W   @K_TMP+2,R0
+        ADD.W   #1,R0
+        CMP.W   #K_PUL+1,R0
+        BNE     kw1
+        RTS
+
+kh_mode:                                 ; SYNTH: voices read the last 64 samples, the oscillator writes all the time
+        MOV.W   #0x003F,R4               ; SAMPLE: voices read the whole RAM, nothing is written until RECORD
+        MOV.W   #0xFFFF,R5
+        TST.B   @K_MODE
+        BEQ     kmd1
+        MOV.W   #0xFFFF,R4
+kmd1:   MOV.W   #KA_XM,R2
+        MOV.W   #KNV,R3
+        JSR     @ksend_n
+        CLR.W   R4                       ; inputs out of the record mix
+        CLR.W   R5
+        MOV.W   #KA_RGIN,R2
+        MOV.W   #2,R3
+        JSR     @ksend_n
+        CLR.W   R0
+        MOV.W   R0,@K_RECN
+        MOV.W   #0x8000,R4               ; MREC = -1 (SYNTH) or 0 (SAMPLE: the RAM stays)
+        TST.B   @K_MODE
+        BEQ     kmd2
+        CLR.W   R4
+kmd2:   CLR.W   R5
+        MOV.W   #KA_MREC,R1
+        JSR     @kcw
+        JMP     @kh_wave
 
 kh_pw:  MOV.W   #K_PW,R0                 ; PWT = 0.5 - lin  (0.5 .. -0.5, 50 = square)
         MOV.W   #kt_lin,R2
         JSR     @lk_set
         JSR     @neg32
         ADD.W   #0x4000,R4
-        MOV.W   #KA_PWT,R2
-        MOV.W   #4,R3
-        JMP     @ksend_n
+        MOV.W   #KA_PWT,R1
+        JMP     @kcw
 
 kh_thru:                                 ; MP5 mix: TH1 = lin (si1), TH0 = lin / 2 (si0)
         MOV.W   #K_THRU,R0
@@ -196,20 +237,8 @@ kh_thru:                                 ; MP5 mix: TH1 = lin (si1), TH0 = lin /
         MOV.W   #2,R3
         JMP     @ksend_n
 
-kh_filt:                                 ; CUTOFF 99 = filter out (DRY), else WET low-pass at cut_tab
-        CMP.B   #99,@K_CUT
-        BNE     kf1
-        CLR.W   R4
-        CLR.W   R5
-        MOV.W   #KA_WET,R2
-        MOV.W   #2,R3
-        JSR     @ksend_n
-        MOV.W   #0x7FFF,R4
-        MOV.W   #0xFFFF,R5
-        MOV.W   #KA_DRY,R2
-        MOV.W   #2,R3
-        JMP     @ksend_n
-kf1:    MOV.W   #K_CUT,R0
+kh_filt:                                 ; f = cut_tab (30 Hz .. 7 kHz), q = res_tab (1.0 .. 0.08)
+        MOV.W   #K_CUT,R0
         MOV.W   #kt_cut,R2
         JSR     @lk_set
         MOV.W   #KA_FF,R2                ; FF1 / FF2 = f
@@ -225,68 +254,51 @@ kf1:    MOV.W   #K_CUT,R0
         JSR     @neg32
         MOV.W   #KA_FMQ,R2
         MOV.W   #2,R3
-        JSR     @ksend_n
-        MOV.W   #0x7FFF,R4
-        MOV.W   #0xFFFF,R5
-        MOV.W   #KA_WET,R2
-        MOV.W   #2,R3
-        JSR     @ksend_n
-        CLR.W   R4
-        CLR.W   R5
-        MOV.W   #KA_DRY,R2
-        MOV.W   #2,R3
         JMP     @ksend_n
 
-kh_spr:                                  ; voice pans by chord size (kt_pan): centre, -s / +s, -s/2 / +s/2 (pan = 0.5 +- x)
-        CLR.W   R6
-ksp1:   JSR     @kvoices                 ; R1 = chord size
-        MOV.W   R1,R2
-        SUB.W   #1,R2
-        SHLL.W  R2
-        SHLL.W  R2
-        ADD.W   R6,R2
-        ADD.W   #kt_pan,R2
-        LDC.B   #0,DP
-        CLR.W   R3
-        MOV.B   @R2,R3                   ; 0 centre, 1 -s, 2 +s, 3 -s/2, 4 +s/2
-        LDC.B   #4,DP
-        MOV.W   R3,@K_TMP
+kh_vol:                                  ; VIN = volume, VXF = volume * (1 - spread)  (SPREAD 0 = mono)
+        MOV.W   #K_VOL,R0
+        MOV.W   #kt_lin,R2
+        JSR     @lk_set
+        MOV.W   R4,@K_TMP
+        MOV.W   #KA_VIN,R2
+        MOV.W   #2,R3
+        JSR     @ksend_n
         MOV.W   #K_SPR,R0
         MOV.W   #kt_lin,R2
         JSR     @lk_set
-        SHAR.W  R4                       ; x = s / 2 (full spread = hard L / R)
-        ROTXR.W R5
-        MOV.W   @K_TMP,R3
-        BNE     ksp2
-        CLR.W   R4                       ; centre
-        CLR.W   R5
-        BRA     ksp4
-ksp2:   CMP.W   #3,R3
-        BCS     ksp3
-        SHAR.W  R4                       ; half spread
-        ROTXR.W R5
-ksp3:   BTST.B  #0,R3                    ; odd codes (1, 3) to the left: L = 0.5 + x
-        BNE     ksp4
-        JSR     @neg32                   ; even codes (2, 4) to the right: L = 0.5 - x
-ksp4:   MOV.W   R4,@-SP
-        MOV.W   R5,@-SP
-        ADD.W   #0x4000,R4               ; L = 0.5 + x
-        MOV.W   R4,@-SP
-        MOV.W   R5,@-SP
-        MOV.W   #KA_PANL,R2
-        JSR     @kvsend
-        MOV.W   @SP+,R5
-        MOV.W   @SP+,R4
-        NOT.W   R4                       ; R = 1.0 - L
+        NOT.W   R4                       ; 1 - spread (hi word)
+        AND.W   #0x7FFF,R4
+        MOV.W   R4,R3
+        MOV.W   @K_TMP,R4
+        JSR     @mulq
+        MOV.W   #KA_VXF,R2
+        MOV.W   #2,R3
+        JMP     @ksend_n
+
+; ---- envelopes: LVL = KD LVL + KT with KD = 1 - K, KT = K T ----
+; kenv: R6 = voice, R0 = rate setting address, R3 = target (Q15) -> KD, KT out
+kenv:   MOV.W   R3,@K_TMP+2
+        MOV.W   #kt_rate,R2
+        JSR     @lk_set
+        MOV.W   R4,@K_TMP                ; K hi
+        NOT.W   R4                       ; KD = 0x7FFFFFFF - K
         NOT.W   R5
         AND.W   #0x7FFF,R4
-        MOV.W   #KA_PANR,R2
+        MOV.W   #KA_KD,R2
         JSR     @kvsend
-        MOV.W   @SP+,R5
-        MOV.W   @SP+,R4
-        ADD.W   #1,R6
-        CMP.W   #4,R6
-        BNE     ksp1
+        MOV.W   @K_TMP,R4
+        MOV.W   @K_TMP+2,R3
+        JSR     @mulq
+        MOV.W   #KA_KT,R2
+        JMP     @kvsend
+
+ksus:   CLR.W   R1                       ; R3 = the sustain target (Q15) = LVLMAX * lvl(SUSTAIN)
+        MOV.B   @K_SUS,R1
+        MOV.W   #kt_lvl,R2
+        JSR     @lk32
+        SHAR.W  R4
+        MOV.W   R4,R3
         RTS
 
 ; ---- notes ----
@@ -294,7 +306,8 @@ ksp4:   MOV.W   R4,@-SP
 kvoices:
         CLR.W   R2
         MOV.B   @K_CHORD,R2
-        MOV.W   R2,R3                    ; *5
+        MOV.W   R2,R3                    ; * 9
+        SHLL.W  R2
         SHLL.W  R2
         SHLL.W  R2
         ADD.W   R3,R2
@@ -319,10 +332,10 @@ kdl:    JSR     @kvoices
         ADD.W   #64,R1
         BPL     kdl1
         CLR.W   R1
-kdl1:    CMP.W   #127,R1
+kdl1:   CMP.W   #127,R1
         BLE     kdl2
         MOV.W   #127,R1
-kdl2:    MOV.W   #kt_note,R2
+kdl2:   MOV.W   #kt_note,R2
         JMP     @lk32
 
 knote_on:                                ; R6 = voice
@@ -334,14 +347,8 @@ knote_on:                                ; R6 = voice
         MOV.W   #KA_PH,R2                ; restart at the sample start
         JSR     @kvsend
         MOV.W   #K_ATK,R0
-        MOV.W   #kt_rate,R2
-        JSR     @lk_set
-        MOV.W   #KA_K,R2
-        JSR     @kvsend
-        MOV.W   #0x7FFF,R4
-        MOV.W   #0xFFFF,R5
-        MOV.W   #KA_T,R2
-        JSR     @kvsend
+        MOV.W   #LVLMAX,R3
+        JSR     @kenv
         MOV.W   R6,R0
         ADD.W   #K_VST,R0
         MOV.B   #1,@R0
@@ -366,18 +373,11 @@ knote_off:                               ; R6 = voice
         BEQ     kno9
         MOV.B   #3,@R0
         MOV.W   #K_REL,R0
-        MOV.W   #kt_rate,R2
-        JSR     @lk_set
-        MOV.W   #KA_K,R2
-        JSR     @kvsend
-        CLR.W   R4
-        CLR.W   R5
-        MOV.W   #KA_T,R2
-        JSR     @kvsend
+        CLR.W   R3
+        JSR     @kenv
 kno9:   RTS
 
-kh_chord:                                ; a new chord size re-spreads the voices, then (re)triggers
-        JSR     @kh_spr
+kh_chord:
 kh_play:                                 ; (re)trigger the chord, or release everything
         CLR.W   R6
 kpl1:   TST.B   @K_PLAY
@@ -389,7 +389,7 @@ kpl1:   TST.B   @K_PLAY
         BRA     kpl4
 kpl3:   JSR     @knote_off
 kpl4:   ADD.W   #1,R6
-        CMP.W   #4,R6
+        CMP.W   #KNV,R6
         BNE     kpl1
         RTS
 
@@ -405,7 +405,7 @@ knt1:   MOV.W   R6,R0
         MOV.W   #KA_DL,R2
         JSR     @kvsend
 knt2:   ADD.W   #1,R6
-        CMP.W   #4,R6
+        CMP.W   #KNV,R6
         BNE     knt1
         RTS
 
@@ -415,13 +415,11 @@ kss1:   MOV.W   R6,R0
         ADD.W   #K_VST,R0
         CMP.B   #2,@R0
         BNE     kss2
-        MOV.W   #K_SUS,R0
-        MOV.W   #kt_lvl,R2
-        JSR     @lk_set
-        MOV.W   #KA_T,R2
-        JSR     @kvsend
+        JSR     @ksus
+        MOV.W   #K_DEC,R0
+        JSR     @kenv
 kss2:   ADD.W   #1,R6
-        CMP.W   #4,R6
+        CMP.W   #KNV,R6
         BNE     kss1
         RTS
 
@@ -432,62 +430,40 @@ krl1:   MOV.W   R6,R0
         CMP.B   #3,@R0
         BNE     krl2
         MOV.W   #K_REL,R0
-        MOV.W   #kt_rate,R2
-        JSR     @lk_set
-        MOV.W   #KA_K,R2
-        JSR     @kvsend
+        CLR.W   R3
+        JSR     @kenv
 krl2:   ADD.W   #1,R6
-        CMP.W   #4,R6
+        CMP.W   #KNV,R6
         BNE     krl1
         RTS
 
-; ---- sample source / recording ----
-kh_src: CLR.W   R4                       ; inputs off in the record mix
-        CLR.W   R5
-        MOV.W   #KA_G,R2
-        MOV.W   #4,R3
-        JSR     @ksend_n
-        TST.B   @K_SRC
-        BNE     ksr1
-        MOV.W   #0x4000,R4               ; SINE: the 64-sample sine is recorded all the time
-        MOV.W   #KA_GS,R1
-        JSR     @kcw
-        MOV.W   #0x7FFF,R4
-        MOV.W   #0xFFFF,R5
-        MOV.W   #KA_REC,R1
-        JMP     @kcw
-ksr1:   CLR.W   R4                       ; INPUT: keep the current sample until RECORD
-        CLR.W   R5
-        MOV.W   #KA_REC,R1
-        JMP     @kcw
-
-keys_record:                             ; K_ACT: 1.49 s from the selected input (SINE: nothing to do)
+; ---- recording (SAMPLE) ----
+keys_record:                             ; K_ACT: 1.49 s from the chosen input (SYNTH: nothing to do)
         LDC.B   #4,DP
         TST.B   @K_OWN
         BEQ     krc9
-        TST.B   @K_SRC
+        TST.B   @K_MODE
         BEQ     krc9
-        CLR.W   R4                       ; sine out of the mix
+        MOV.W   #0x4000,R4               ; that input at 0.5 into the record mix
         CLR.W   R5
-        MOV.W   #KA_GS,R1
-        JSR     @kcw
-        MOV.W   #0x4000,R4               ; the chosen pair at 0.5 each: A = si0 L + R, B = si1 L + R
-        MOV.W   #KA_G,R2
-        CMP.B   #1,@K_SRC
+        MOV.W   #KA_RGIN,R2
+        TST.B   @K_SRC
         BEQ     krc1
-        ADD.W   #2,R2
-krc1:   MOV.W   #2,R3
-        JSR     @ksend_n
+        ADD.W   #1,R2
+krc1:   LDC.B   #0,DP
+        MOV.B   @R2,R1
+        LDC.B   #4,DP
+        JSR     @kcw
         CLR.W   R4                       ; AGE = 0: the sample starts now
-        CLR.W   R5
         MOV.W   #KA_AMASK,R1
         JSR     @kcw
         MOV.W   #0xFFFF,R4
         MOV.W   #0xFFFF,R5
         MOV.W   #KA_AMASK,R1
         JSR     @kcw
-        MOV.W   #0x7FFF,R4
-        MOV.W   #KA_REC,R1
+        MOV.W   #0x8000,R4               ; MREC = -1: the slot gets the input
+        CLR.W   R5
+        MOV.W   #KA_MREC,R1
         JSR     @kcw
         MOV.W   #REC_TICKS,R0
         MOV.W   R0,@K_RECN
@@ -505,15 +481,18 @@ keys_tick:
         MOV.B   R1,@K_LASTT
         CLR.W   R3
         MOV.B   R0,R3
-        MOV.W   R3,@K_TMP
+        MOV.W   R3,@K_TMP+2
         MOV.W   @K_RECN,R1               ; recording
         BEQ     ktk2
         SUB.W   R3,R1
         BGT     ktk1
-        CLR.W   R4
+        CLR.W   R4                       ; done: inputs out, MREC = 0 (the RAM stays)
         CLR.W   R5
         MOV.W   R5,@K_RECN
-        MOV.W   #KA_REC,R1
+        MOV.W   #KA_RGIN,R2
+        MOV.W   #2,R3
+        JSR     @ksend_n
+        MOV.W   #KA_MREC,R1
         JSR     @kcw
         BRA     ktk2
 ktk1:   MOV.W   R1,@K_RECN
@@ -526,30 +505,27 @@ ktk3:   MOV.W   R6,R0
         SHLL.W  R2
         ADD.W   #K_VT,R2
         MOV.W   @R2,R1
-        SUB.W   @K_TMP,R1
+        SUB.W   @K_TMP+2,R1
         MOV.W   R1,@R2
         BGT     ktk5
         MOV.B   #2,@R0                   ; attack over: decay to SUSTAIN
+        MOV.W   @K_TMP+2,R0
+        MOV.W   R0,@-SP
+        JSR     @ksus
         MOV.W   #K_DEC,R0
-        MOV.W   #kt_rate,R2
-        JSR     @lk_set
-        MOV.W   #KA_K,R2
-        JSR     @kvsend
-        MOV.W   #K_SUS,R0
-        MOV.W   #kt_lvl,R2
-        JSR     @lk_set
-        MOV.W   #KA_T,R2
-        JSR     @kvsend
+        JSR     @kenv
+        MOV.W   @SP+,R0
+        MOV.W   R0,@K_TMP+2
 ktk5:   ADD.W   #1,R6
-        CMP.W   #4,R6
+        CMP.W   #KNV,R6
         BNE     ktk3
 ktk9:   RTS
 
 ; ---- program in / out ----
 keys_load:
         MOV.B   #1,@K_OWN                ; gate Sony first
-        MOV.B   #0,@K_PLAY               ; start silent, with the sine as the sample
-        MOV.B   #0,@K_SRC
+        MOV.B   #0,@K_PLAY               ; start silent, SYNTH with the sine
+        MOV.B   #0,@K_MODE
         STC.W   SR,R0
         MOV.W   R0,@-SP
         ORC.W   #0x0700,SR
@@ -573,8 +549,11 @@ kld1:   MOV.B   #0xFF,@R0+
         BNE     kld1
         CLR.W   R0
         MOV.W   R0,@K_RECN
-        MOV.W   R0,@K_VST
-        MOV.W   R0,@K_VST+2
+        MOV.W   #K_VST,R1
+kld2:   MOV.W   R0,@R1
+        ADD.W   #2,R1
+        CMP.W   #K_VST+8,R1
+        BNE     kld2
         MOV.B   @L_TICK,R0
         MOV.B   R0,@K_LASTT
         RTS
@@ -629,7 +608,7 @@ gate_cl:                                 ; 0x14678: coefficient-memory load
         PJMP    @SONY_CL_CONT
 gcl1:   LDC.B   R0,DP
         PJMP    @SONY_LD_SKIP
-gate_mr:                                 ; 0x13E43: meter read (waits for host data our program may not give)
+gate_mr:                                 ; 0x13E43: meter read (waits for TMS57002 host data our program never gives)
         STC.B   DP,R0
         LDC.B   #4,DP
         TST.B   @K_OWN
@@ -677,7 +656,7 @@ dnn3:   CLR.B   @R0
         .align 2
 pg_keys:
         .dw     t_keys, s_keys
-        .db     19, 0
+        .db     20, 0
         .dw     l_kplay
         .db     K_LIST, 1
         .dw     K_PLAY, n_offon
@@ -685,17 +664,14 @@ pg_keys:
         .db     K_DYN, 0
         .dw     K_NOTE, dyn_note
         .dw     l_kchord
-        .db     K_LIST, 5
+        .db     K_LIST, 7
         .dw     K_CHORD, n_kchord
-        .dw     l_ksrc
-        .db     K_LIST, 2
-        .dw     K_SRC, n_ksrc
-        .dw     l_krec
-        .db     K_ACT, 0
-        .dw     keys_record, 0
-        .dw     l_ksmp
+        .dw     l_kmode
+        .db     K_LIST, 1
+        .dw     K_MODE, n_kmode
+        .dw     l_ksine
         .db     K_NUM, 99
-        .dw     K_SMP, 0
+        .dw     K_SINE, 0
         .dw     l_ksaw
         .db     K_NUM, 99
         .dw     K_SAW, 0
@@ -705,9 +681,12 @@ pg_keys:
         .dw     l_kpw
         .db     K_NUM, 99
         .dw     K_PW, 0
-        .dw     l_ktri
-        .db     K_NUM, 99
-        .dw     K_TRI, 0
+        .dw     l_ksrc
+        .db     K_LIST, 1
+        .dw     K_SRC, n_ksrc
+        .dw     l_krec
+        .db     K_ACT, 0
+        .dw     keys_record, 0
         .dw     l_katk
         .db     K_NUM, 99
         .dw     K_ATK, 0
@@ -729,6 +708,9 @@ pg_keys:
         .dw     l_kspr
         .db     K_NUM, 99
         .dw     K_SPR, 0
+        .dw     l_kvol
+        .db     K_NUM, 99
+        .dw     K_VOL, 0
         .dw     l_kthru
         .db     K_NUM, 99
         .dw     K_THRU, 0
@@ -736,22 +718,23 @@ pg_keys:
         .db     K_DYN, 0
         .dw     K_ROOT, dyn_note
 
-n_kchord: .dw   c_one, c_oct, c_fifth, c_maj, c_min, c_maj7
-n_ksrc:   .dw   s_sine, s_ina, s_inb
+n_kchord: .dw   c_one, c_oct, c_fifth, c_maj, c_min, c_maj7, c_min7, c_stack
+n_kmode:  .dw   s_synth, s_sample
+n_ksrc:   .dw   s_ina, s_inb
 
 t_keys:   .asciz "DDS-DSP SAMPLER"
 l_keys:   .asciz "DDS-DSP SAMPLER"
-s_keys:   .asciz "4 VOICE"
+s_keys:   .asciz "8 VOICE"
 l_kplay:  .asciz "PLAY"
 l_knote:  .asciz "NOTE"
 l_kchord: .asciz "CHORD"
-l_ksrc:   .asciz "SOURCE"
-l_krec:   .asciz "RECORD"
-l_ksmp:   .asciz "SAMPLE"
+l_kmode:  .asciz "MODE"
+l_ksine:  .asciz "SINE"
 l_ksaw:   .asciz "SAW"
 l_kpul:   .asciz "PULSE"
 l_kpw:    .asciz "WIDTH"
-l_ktri:   .asciz "TRIANGLE"
+l_ksrc:   .asciz "SOURCE"
+l_krec:   .asciz "RECORD"
 l_katk:   .asciz "ATTACK"
 l_kdec:   .asciz "DECAY"
 l_ksus:   .asciz "SUSTAIN"
@@ -759,6 +742,7 @@ l_krel:   .asciz "RELEASE"
 l_kcut:   .asciz "CUTOFF"
 l_kres:   .asciz "RESONANCE"
 l_kspr:   .asciz "SPREAD"
+l_kvol:   .asciz "VOLUME"
 l_kthru:  .asciz "THRU"
 l_kroot:  .asciz "ROOT"
 c_one:    .asciz "1 NOTE"
@@ -767,17 +751,18 @@ c_fifth:  .asciz "FIFTH"
 c_maj:    .asciz "MAJOR"
 c_min:    .asciz "MINOR"
 c_maj7:   .asciz "MAJ 7"
-s_sine:   .asciz "SINE"
+c_min7:   .asciz "MIN 7"
+c_stack:  .asciz "8 STACK"
+s_synth:  .asciz "SYNTH"
+s_sample: .asciz "SAMPLE"
 s_ina:    .asciz "INPUT A"
 s_inb:    .asciz "INPUT B"
 kt_nn:    .ascii "C C#D D#E F F#G G#A A#B "
-kt_pan:   .db   0, 0, 0, 0                ; pan codes by chord size 1..4 (voice 0..3)
-          .db   1, 2, 0, 0
-          .db   0, 1, 2, 0
-          .db   1, 2, 3, 4
-kt_chord: .db   1, 0, 0, 0, 0
-          .db   2, 0, 12, 0, 0
-          .db   2, 0, 7, 0, 0
-          .db   3, 0, 4, 7, 0
-          .db   3, 0, 3, 7, 0
-          .db   4, 0, 4, 7, 11
+kt_chord: .db   1, 0, 0, 0, 0, 0, 0, 0, 0      ; voices, then 8 semitone offsets
+          .db   2, 0, 12, 0, 0, 0, 0, 0, 0
+          .db   2, 0, 7, 0, 0, 0, 0, 0, 0
+          .db   3, 0, 4, 7, 0, 0, 0, 0, 0
+          .db   3, 0, 3, 7, 0, 0, 0, 0, 0
+          .db   4, 0, 4, 7, 11, 0, 0, 0, 0
+          .db   4, 0, 3, 7, 10, 0, 0, 0, 0
+          .db   8, 0, 7, 12, 16, 19, 24, 28, 31

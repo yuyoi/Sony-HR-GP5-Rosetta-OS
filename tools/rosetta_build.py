@@ -135,7 +135,7 @@ def build(out, model="gp5"):
     if has_keys:                                                     # DDS-DSP SAMPLER (src/keys.asm + tools/keysdsp.py)
         import keysdsp
         src += "\n" + open(os.path.join(ROOT, "src", "keys.asm"), encoding="utf-8").read()
-        src += "\n" + keysdsp.gen_asm(keysdsp.Image(platform=model), model)
+        src += "\n" + keysdsp.gen_asm(keysdsp.build(platform=model), model)
     else:
         src += "\nkeys_apply:\nkeys_tick:\n        RTS\n"
     src += "\n" + gen_tables(rom, pf)
@@ -279,7 +279,7 @@ def emu_keys_test(img, model, sy):
     PLAY on -> the H8's coefficient writes, replayed into tools/tms57sim.py, play the boot sine at fs / 64; leaving the
     page -> Sony's program-change sequence reloads Sony's own TMS57002 program."""
     import dsplog, keysdsp, tms57sim, math
-    im = keysdsp.Image(platform=model)
+    im = keysdsp.build(platform=model)
     e = new_emu(img, model); e.run(1_500_000)
     e.dsplog = []
     mark = []
@@ -309,7 +309,7 @@ def emu_keys_test(img, model, sy):
     import re as _re
     host = set()
     for n in set(im.cslot.values()) | set(im.cadr):
-        if _re.fullmatch(r"(DL|PH|T|K|SL|AL|PL|TL|PWT|PANL|PANR)\d|FF[12][LR]|FM[FQ][LR]|WET[LR]|DRY[LR]|TH[01][LR]|G[0-3]|GS|REC|AMASK", n):
+        if _re.fullmatch(r"(DL|PH|KD|KT|XM)\d|FF[12][LR]|FM[FQ][LR]|VIN[LR]|VXF[LR]|TH[01][LR]|RG[02SWP]|MREC|AMASK|PWT", n):
             host.update(im.addrs(n))
     stray = sorted(set(a for a, v in after) - host)
     assert not stray, "writes to non-parameter coefficients while KEYS owns the DSP (gate leak): %s" % stray
@@ -324,6 +324,22 @@ def emu_keys_test(img, model, sy):
     f = (len(z) - 1) / ((z[-1] - z[0]) / 44100.0) if len(z) > 2 else 0
     rms = math.sqrt(sum(v * v for v in y) / len(y)) / 0x800000
     assert abs(f - 44100 / 64) < 2 and rms > 0.05, (f, rms)
+    # CHORD -> 8 STACK while playing: all 8 voices, every pitch in the output
+    n0 = len(tms2.updates)
+    e.press("C"); e.dial(7, 150000); e.press("EXIT")                 # row C = CHORD, edit, last entry
+    for _ in range(20): e.run(20000)
+    tms4, _ = dsplog.decode(e.dsplog)
+    for a, v in tms4.updates[n0:]:
+        t.host_update(a, v); t.sample(); t.sample()
+    for _ in range(4000): t.sample()
+    y = [t.sample()[0] for _ in range(8192)]
+    y = [v - (1 << 24) if v & 0x800000 else v for v in y]
+    yr = [v for v in y]
+    def tone(fr): return 2 * math.hypot(sum(v * math.cos(2 * math.pi * fr * i / 44100) for i, v in enumerate(y)),
+                                        sum(v * math.sin(2 * math.pi * fr * i / 44100) for i, v in enumerate(y))) / len(y) / 0x800000
+    stack = [0, 7, 12, 16, 19, 24, 28, 31]
+    amps = [tone(44100 / 64 * 2 ** (s_ / 12.0)) for s_ in stack]
+    assert all(a_ > 0.01 for a_ in amps), ["%.3f" % a_ for a_ in amps]
     # leave the page: K_OWN off, Sony reloads its program
     mark = len(e.dsplog)
     e.press("EXIT")
@@ -335,7 +351,7 @@ def emu_keys_test(img, model, sy):
     ref, _ = dsplog.decode(e0.dsplog)
     assert tms3.prog == ref.prog, "Sony's program after KEYS differs from the boot program"
     return dict(our_updates=len(after), gated=hits, pitch=round(f, 1), rms=round(rms, 3),
-                sony_reload_words=len(tms3.prog))
+                stack8=" ".join("%.3f" % a_ for a_ in amps), sony_reload_words=len(tms3.prog))
 
 
 if __name__ == "__main__":

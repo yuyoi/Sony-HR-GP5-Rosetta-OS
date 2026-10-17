@@ -189,24 +189,31 @@ the MAME semantics incl. delay RAM and coefficient updates), checked on Sony's c
 generator + rendered WAV tests; (3) H8 side: program upload, gate Sony's TMS writes, a Rosetta KEYS page that plays test
 notes from the panel, first hardware burn; (4) MIDI note-on hook; (5) oscillators, filter, envelopes, LFO, ARP.
 
-## DDS-DSP SAMPLER (Rosetta 0.4.0, HR-MP5 build, emulator-tested 2026-10-17)
-Steps 1-3 and most of 5 are done. Files: `tools/tms57sim.py` (simulator + assembler), `tools/keysdsp.py` (program
-generator, scheduler, linker, self-test, H8 tables), `src/keys.asm` (page, H8 driver, gates).
+## DDS-DSP SAMPLER (Rosetta 0.4.0, HR-MP5 build, 8 voices, emulator-tested 2026-10-17)
+Files: `tools/tms57sim.py` (simulator + assembler), `tools/keysdsp.py` (program generator, scheduler, linker, self-test,
+H8 tables), `src/keys.asm` (page, H8 driver, gates). A first 4-voice version (per-voice oscillator layers and pans,
+commit cd5b496) was rebuilt for 8 voices:
 - **Simulator** (`tms57sim.py --selftest`): Sony's 256-word program round-trips through the assembler; Sony's GP5 and MP5
   programs run in it with sane outputs (MP5 boot patch: so0 = 0.5 si0 + 1.0 si1, so1 = si1). Instructions MAME leaves empty
   but Sony uses: `zacc` (a = 0), `dos` (so = data word).
-- **Program** (251 of 256 words, 4 voices): per voice PH += DL, X = AGE - PH, two delay-RAM reads at int(X) / int(X) + 1
-  (address stored and used in one word: `rde c*+ ; smhc c*+`), linear interpolation, saw = PH << 10 (root fs / 64), pulse =
-  sign(PWT - tri) (width), tri = 0.5 - |saw|, layer mix, one-pole envelope LVL += K (T - LVL), pan L / R; stereo
-  Chamberlin SVF (separate -q and -f coefficients so both stay in Q31), THRU = Sony's own so0 mix, so1 = si1, `lpc` of
-  |out L| every sample. Record: read-modify-write of the slot at xoa 0 (REC 0 = untouched), source = G0..G3 inputs + GS sine.
-  Boot: REC = 1, GS = 0.5 -> a 64-sample sine fills the RAM (1024 exact periods: loops seamlessly).
-- **Scheduler**: every once-per-sample coefficient is a `c*+` stream slot placed by the linker in program order (frees the
-  word's direct-address slot for data); threads claim A / M / RAM port / pointers as a closure (no deadlock); a few hundred
-  deterministic priority orders, the shortest kept. Checks: MAC results read 2 words later, delay-RAM accesses 4 words
-  apart, `srbd` before the next read, no access in the last 5 words.
-- **Self-test** (`keysdsp.py --test`): root 689.1 Hz, +12 / +7 exact, L = R at centre, release to silence, saw / pulse /
-  triangle levels, 300 Hz low-pass, 3-voice chord, THRU and so1 bit-exact, lpc armed.
+- **Program** (255 words + idle = all 256): one DDS oscillator (sine = 3 x (1 - |x|) parabola, saw, pulse = sign(PWT - tri))
+  is mixed into the delay RAM every sample at xoa 0 (W = OLD + sum RGx src + MREC OLD; all 0 = the RAM stays). SYNTH: the
+  64-sample cycle repeats through the RAM and each voice reads the last 64 samples ((AGE - PH) & 0x3FFFFF), so wave edits are
+  heard at once. SAMPLE: a 1.49 s recording of si0_l or si1_l, voices read the whole RAM from the record start (AGE reset
+  by AMASK). Per voice (18 operations): PH += DL, two reads (address stored and used in one word: `rde c*+ ; smhc c*+`),
+  interpolation, envelope LVL = KD LVL + KT (the H8 sends KD = 1 - K, KT = K T). The voice outputs are summed one sample
+  later (SUML = even voices, SUMR = odd, LVL as the coefficient, the id pointer walking the SVx.r block), so the sums and
+  filters run alongside the voices. Filter in = VIN SUM + VXF other SUM (SPREAD 0 = mono), stereo Chamberlin SVF, THRU =
+  Sony's own so0 mix, so1 = si1. No `lpc` (Sony's meter read is gated instead).
+- **Scheduler**: exact TMS57002 MAC timing (a read at word t sees the macc of word t - 2, so a read can sit right after the
+  next write; such reads are forced into place and get their resources reserved), A held for a value's live range, M for an
+  accumulate chain plus its reads, the RAM port from a read to its `srbd` (window: before the next read completes), the id
+  pointer while walking; resources taken in the order A < P < I < M (no deadlock); op-level "after" dependencies; every
+  once-per-sample coefficient is a `c*+` stream slot placed by the linker. A few hundred deterministic priority orders,
+  the shortest kept: 255 words. Linker checks the id pointer and delay-RAM spacing.
+- **Self-test** (`keysdsp.py --test`, all pass): root 689.1 Hz, +12 / -12 / +7 exact, sine (h3 3.7 %), L = R at SPREAD 0,
+  release to silence, 8-note chord (even voices L, odd R, all 8 even in L at SPREAD 0), saw harmonics, 300 Hz low-pass,
+  pulse 50 % / 25 %, SAMPLE record + playback +12 and kept, THRU and so1 bit-exact.
 - **H8 side**: entering the page sets K_OWN, uploads ST0 / ST1 / program (PLOAD kept on, so the DSP waits) then all 256
   coefficients (Sony's 0x14690 / 0x1467D through page-1 stubs `KST_PL` / `KST_CL`), then sends every setting. Sony's 5 TMS
   entries (0x14755, 0x146DC, 0x1468B, 0x14678, 0x13E43 meter read) start with `MOV.B #4,@FD10` and are patched to `PJMP gate_*`:
@@ -214,7 +221,11 @@ generator, scheduler, linker, self-test, H8 tables), `src/keys.asm` (page, H8 dr
   structure bytes (0x39 / 0x4B / 0x75 / 0x87, Sony's tables at 0x14D6A) in Sony's DSP-side copy 0x41330, so Sony's
   program-change sequence reloads its own TMS program.
 - **Emulator test** (`rosetta_build.py mp5`): program + coefficient images arrive byte-exact; PLAY -> the H8's writes,
-  replayed into the simulator, play 689.1 Hz; Sony's meter reads (258) and coefficient writes (18, provoked by changing
-  program bytes) are gated, no stray writes; leaving the page reloads Sony's program word-for-word.
+  replayed into the simulator, play 689.1 Hz; CHORD 8 STACK -> all 8 pitches in the output; Sony's meter reads and
+  coefficient writes (provoked by changing program bytes) are gated, no stray writes; leaving the page reloads Sony's
+  program word-for-word.
+- Panel: PLAY, NOTE, CHORD (1 NOTE / OCTAVE / FIFTH / MAJOR / MINOR / MAJ 7 / MIN 7 / 8 STACK), MODE (SYNTH / SAMPLE),
+  SINE / SAW / PULSE / WIDTH, SOURCE (INPUT A = si0 L, B = si1 L), RECORD, ATTACK / DECAY / SUSTAIN / RELEASE, CUTOFF /
+  RESONANCE, SPREAD, VOLUME, THRU, ROOT. A voice peaks at 0.5 (4 per side without clipping).
 - Not yet: MIDI notes, the GP5 build (two copies of each TMS routine there), sample-rate check on hardware (all pitches
-  assume 44.1 kHz; ROOT corrects the sample, not the oscillators), more voices (the scheduler wastes ~30 words in MAC waits).
+  assume 44.1 kHz), no filter bypass (CUTOFF 99 = 7 kHz), no triangle wave (it is only used for the pulse).
