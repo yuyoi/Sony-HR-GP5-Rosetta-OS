@@ -44,7 +44,8 @@ Everything here came from disassembling the stock EPROM (Ver1.03E). Addresses ar
   HDOT SCR = 3 (picture shifted left 3 dots). VRAM is likely 2 KB (Sony clears exactly 0x800 bytes; LC3517).
 - Glass bigger than the picture? The drive chain starts at the top left, so extra pixels can only be right of
   or below the 228 x 40 picture. Rosetta 0.3.1 ROSETTA -> EDGE TEST drives 252 x 48 all black + blinks, then shows a
-  black-frame preview in Sony's geometry, then reboots (src/edgetest.asm). Hardware result: pending.
+  black-frame preview in Sony's geometry, then reboots (src/edgetest.asm). **Hardware result (2026-10-17): the picture
+  blinks, nothing outside it does. The glass has exactly 228 x 40 pixels**; the edge border is not drivable.
 - Graphics byte = 6 pixels, MSB first, bits 1-0 unused.
 - Firmware draws into a **RAM shadow at 0x40000** (0x000-0x5EF gfx, 0x5F0-0x6AD text) and the IRQ0 handler
   streams it to VRAM 30 bytes at a time (position in FD80+ var 0xFDD8).
