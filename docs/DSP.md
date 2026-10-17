@@ -93,6 +93,23 @@ ST0 = `010820`, ST1 = `000820` (status / mode words sent first).
 - c(06) is not a modulation value: it is the host-read pointer (7) that the tick rewrites.
 - The 38-tap FIR (words 51-88) runs on si1_r.
 
+**HR-MP5 service manual (same board 1-649-450-13, printed "HR-GP5 / HR-MP5"; scans read 2026-10-17):**
+| part | GP5 | MP5 |
+|---|---|---|
+| EPROM IC507 | LE27C1001F-**GP5**-E1 | LE27C1001F-**MP5**-E1 (different firmware) |
+| R1001 (CH1 -> CH2 link) | 0 ohm | not fitted |
+| CH2 input: R1003 0, L201 4.7 uH, C201 22 uF, R201 100k | not fitted (bare pads) | fitted: CH2 jack -> R1003 -> L201 -> C201 -> IC201(1/2) |
+| IC201(1/2) | amp x9.4 (R212 47k / R211 5.6k) | buffer (R212 0 ohm) |
+| IC201(2/2) | amp x6.7 (R214 47k / R213 8.2k) | buffer (R214 0 ohm) |
+| D201/D202 zeners | fitted | not drawn |
+| R1002 (IC201 stage to stage) | 0 ohm | CH2 leaves through the input board (RV101 gang 2 -> IC102(2/2)) and comes back |
+| rear jacks J101 | PEDAL + INPUT (REAR, into the CH1 path L101) | CH1/MONO (L101) + CH2 (R1003 -> L201); CH2's switch normals CH1 into CH2 |
+| front | guitar INPUT + RV401 + IC401 | pedal jack; dual level pot RV101 + amp IC102 |
+
+**MP5-style second input on the GP5 (Sony's own footprints):** R1001 out (done); fit R1003 0 ohm, L201 4.7 uH (or a link),
+C201 22 uF/16 V, R201 100k; feed the jack's tip into the R1003 pad and break its old route to L101 (beep the tip to both
+pads first); choose the CH2 gain with R212 / R214 (0 ohm = MP5 unity for line level; stock = +36 dB clipped).
+
 **Meters that can (Rosetta v0.3.5, ROSETTA -> INPUT):**
 - **ADC L / ADC R = the raw analog channels via the CPU's own A/D.** IC506 (HD6435208A00F) pins: 45 AN0 (VBAT), 46 AN1
   (PEDAL), **47 P62/AN2 and 48 P63/AN3 tied to AVSS (unused)**, 49 AVCC, 44 AVSS. Sony sets ADCSR = 0x31 at 0x0208
