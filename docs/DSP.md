@@ -92,6 +92,8 @@ ST0 = `010820`, ST1 = `000820` (status / mode words sent first).
   through a 0..24 table (0x14C95) into **FD87 (L) / FD89 (R)**, peak hold FD86 / FD88. Sony's METER popup shows one
   bar only. Rosetta draws both as 24-segment bars, refreshed every 8 ticks from the idle dial slot. Use: inject a test
   signal anywhere on the input side (MP5 pins, IC101 / IC121) and watch which channel moves.
+  **Hardware result (2026-10-17): with the guitar in the front jack both bars move.** The meters work on the real
+  unit, and the one jack feeds both ADC channels (bridged somewhere before IC101 / IC121). Next: find the bridge.
 
 ## Rosetta LFO (v0.3, emulator-tested)
 - Hooks the 5 ms system tick (vector 0xC0 -> `lfo_isr` -> Sony's handler). Every 2nd tick: phase += rate,
