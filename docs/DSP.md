@@ -190,6 +190,8 @@ generator + rendered WAV tests; (3) H8 side: program upload, gate Sony's TMS wri
 notes from the panel, first hardware burn; (4) MIDI note-on hook; (5) oscillators, filter, envelopes, LFO, ARP.
 
 ## DDS-DSP SAMPLER (Rosetta 0.4.1, HR-MP5 build, 8 voices + MIDI IN, emulator-tested 2026-10-17)
+> **Not tested on hardware yet.** Everything below runs in our emulator + TMS57002 simulator only.
+
 Files: `tools/tms57sim.py` (simulator + assembler), `tools/keysdsp.py` (program generator, scheduler, linker, self-test,
 H8 tables), `src/keys.asm` (page, H8 driver, gates). A first 4-voice version (per-voice oscillator layers and pans,
 commit cd5b496) was rebuilt for 8 voices:
