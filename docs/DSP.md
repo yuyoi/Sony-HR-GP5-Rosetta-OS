@@ -162,3 +162,29 @@ it reuses a path Sony already uses, and it gives every stock effect new life.
   full instruction set.
 - GP5 HALL vs MP5 HALL: different uploads (173 vs 148 chunks, 21 shared chunks; the MP5 sends one 724 B program chunk).
   The MP5's reverb is a different build of the code (relocated or rewritten for the dual chain). By ear it's unknown.
+
+## KEYS sampler / synth on the TMS57002: feasibility (2026-10-17, from MAME's core + Sony's ST0)
+Idea: the SP-808 Rosetta KEYS mode (`sp808/tools/keysdsp.py`): our own program in the effects DSP records the input into
+its delay RAM and plays N pitched voices from it, with the H8 sending only pitch / gate / level coefficients. Here the
+TMS57002 is the target (MAME has a full core; DSP #2's instruction set is unknown).
+- **Delay RAM = 64K 16-bit samples (~1.4 s at 44.1-48 kHz).** Sony's ST0 `010820` = M_256K, 4-bit bus (SEL = 0),
+  16-bit words (WORD = 0): a 256K x 4 DRAM (CAT514256, IC510). Address = (xoa + xba) * 4 nibbles, xba counts down 1 per sample.
+- **External memory speed:** one access at a time, one nibble per instruction: a 16-bit read or write takes 4 instruction
+  cycles. A `rde` / `wre` issued while one is still in flight is silently dropped. Up to ~60 accesses per sample.
+- **Computed read addresses work:** `rde c` reads at xoa = cmem[c], and `sacc c` writes the accumulator into cmem from
+  the program. So each voice computes its own tap (AGE - phase) every sample. `srbd d` stores the read result.
+- **3 operations per instruction word:** cat2-pre (stores: sacc / sacd / srbd / lira / dis) + cat1 (ALU / MAC / rde / wre)
+  + cat2-post (dos = output) all run in one word. So a voice is far fewer words than on the SP-808's ESP2.
+- Host updates (`CLOAD` coefficient writes) queue (16 deep) and apply when the program reads that coefficient: fine for
+  pitch / gate / level per note. ST1 CRM can read a coefficient's high or low 16 bits (integer / fraction split).
+- **Estimate (my draft, not assembled yet):** about 16-20 words per interpolated sample voice and ~30 words of
+  globals (input, record write, mix, filter, output) gives **~10-12 sample voices**. Pure oscillator voices (DDS phase,
+  saw / pulse / triangle via abs and saturation) need no RAM and fewer words. Stereo: a pan per voice into L / R sums,
+  out on so0_l / so0_r.
+- While KEYS owns the TMS57002, Sony's TMS effects are gone (the chip is full) and Sony's driver writes must be gated
+  (SP-808: Roland's DSP1 writes gated the same way).
+
+Steps: (1) `tms57asm.py` (from `tmsinstr.lst` encodings, round-trip through `tms57dis.py`) + `tms57sim.py` (Python port of
+the MAME semantics incl. delay RAM and coefficient updates), checked on Sony's captured program; (2) a KEYS program
+generator + rendered WAV tests; (3) H8 side: program upload, gate Sony's TMS writes, a Rosetta KEYS page that plays test
+notes from the panel, first hardware burn; (4) MIDI note-on hook; (5) oscillators, filter, envelopes, LFO, ARP.
