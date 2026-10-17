@@ -23,7 +23,7 @@ your PC. Don't share dumps, builds or disassembly listings: share this repo inst
 |---|---|
 | Hex girl boot animation, then the stock boot screen | **hardware** |
 | **Rosetta OS v0.1**: factory presets stripped to one INIT program (17 KB of page 0 freed), TEST mode off, SYSTEM -> B = **ROSET** screen | **hardware** |
-| **Rosetta OS v0.3.4**: ROSETTA → INPUT test page. **Correction:** the two meters and mutes act on signals from Sony's DSP (IC502), not on the ADC channels (see [docs/DSP.md](docs/DSP.md)) | **on hardware, labels wrong** |
+| **Rosetta OS v0.3.5**: ROSETTA → INPUT: **raw ADC L/R meters** through the CPU's spare A/D inputs (needs a small wiring mod), and Sony's DSP meter with a SOURCE selector (see [docs/DSP.md](docs/DSP.md)) | **emulator-tested** |
 | **Rosetta OS v0.3.2**: EDGE TEST removed again (v0.3.1 probe answered it on hardware: the glass is exactly 228 x 40) | **emulator-tested** |
 | **Second input**: the board has the HR-MP5's (stereo model) input connectors unfitted, and the DSP already reads both ADC channels. Mod plan in [docs/DSP.md](docs/DSP.md) | **research** |
 | **Rosetta OS v0.3**: **LFO** on any parameter of any block (triangle/sine/square/saw/random, rate, depth), through Sony's own DSP driver | **burned, hardware test pending** |

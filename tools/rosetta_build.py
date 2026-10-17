@@ -9,7 +9,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.3.4"
+VERSION = "0.3.5"
 PRESETS, PRESET_LEN = 0xB318, 0xB0
 INIT_FROM = 8                        # "Transparnt" becomes the single INIT program
 FREE0, FREE0_END = PRESETS + PRESET_LEN, 0xF7D8
@@ -57,6 +57,10 @@ def gen_tables(rom):
     for i in range(0, 100, 10): out.append("        .dw     " + ", ".join(str(v) for v in rates[i:i + 10]))
     out.append("sine_tab:")
     for i in range(0, 256, 16): out.append("        .db     " + ", ".join(str(v) for v in sine[i:i + 16]))
+    thr = [max(1, round(255 * 10 ** (-(24 - i) * 2 / 20))) for i in range(1, 25)]   # ADC p-p thresholds, 2 dB apart
+    out.append("thr_tab:")
+    out.append("        .db     " + ", ".join(str(v) for v in thr))
+    out.append("        .align 2")
     out.append("blk_tab:")
     for k, (o, b) in enumerate(BLOCKS): out.append("        .db     %d, %d, %d, 0" % (o, b, bases[k + 1] - b))
     return "\n".join(out) + "\n"
@@ -96,6 +100,9 @@ def build(out):
     assert sy["CWRITE_P1"] == CWRITE_P1
     patch(rom, CWRITE_P1, "ff ff ff ff ff", "18 56 b3 11 19")        # JSR @0x56B3 ; PRTS
 
+    # 3a2. CPU A/D: Sony scans AN0-AN1 (battery, pedal); scan AN0-AN3 so AN2/AN3 can be the raw L/R input meters
+    patch(rom, 0x0208, "15 ff e8 06 31", "15 ff e8 06 33")         # MOV.B #0x33,@ADCSR
+
     # 3b. 5 ms system tick (vector 0xC0) -> lfo_isr, which then jumps on to Sony's handler
     patch(rom, 0x00C0, "00 00 04 fd", bytes([0, 0, sy["lfo_isr"] >> 8, sy["lfo_isr"] & 0xFF]))
 
@@ -133,7 +140,7 @@ def emu_tour(img, shots):
              ("D", "04_boot_page"), ("EDIT", "05_boot_edit"), ("dial-1", "06_boot_off"), ("EXIT", "07_boot_edit_off"),
              ("EXIT", "08_back_root"), ("A", "09_mod"), ("dial+1", None), ("EDIT", "10_mod_rate_edit"),
              ("dial+7", "11_rate_27"), ("EXIT", None), ("dial+3", "12_mod_scrolled"), ("EXIT", None),
-             ("E", "13_about"), ("EXIT", None), ("C", "15_input"), ("C", "15b_input_l_edit"), ("dial-1", "16_input_l_off"),
+             ("E", "13_about"), ("EXIT", None), ("C", "15_input"), ("E", "15b_input_source"), ("dial-1", "16_input_src_si0"),
              ("EXIT", None), ("EXIT", None), ("EXIT", "14_back_to_system")]
     for k, name in steps:
         if k.startswith("dial"): e.dial(int(k[4:]), 150000)
@@ -152,19 +159,27 @@ def emu_boot_skip(img, ram):
 
 
 def emu_input_test(img):
-    """INPUT TEST: IN L off -> c(08) = 0 sent through Sony's routine; IN R off -> c(09) = 0; re-entering ROSETTA
-    turns both back on (0x14300000). Returns the decoded live coefficient updates for c(08) / c(09)."""
+    """INPUT page: SOURCE re-aims the DSP meter (c(05) = 0x1F / 0x27 << 24 through Sony's routine, Sony's 0x21 back on
+    re-entry); ADC L / R bars follow the CPU A/D AN2 / AN3 (emulated as a swinging value / a constant)."""
     import dsplog
     e = gp5emu.Emu(img); e.run(1_500_000)
+    assert e.rom[0x020C] == 0x33, "A/D scan AN0-AN3 patch missing"
     e.dsplog = []
-    for k in ("SYSTEM", "B", "C", "C"): e.press(k)        # ROSETTA -> INPUT -> IN L (row C), edit
-    e.dial(-1, 150000)                                   # IN L -> OFF
-    e.press("EXIT"); e.press("D"); e.dial(-1, 150000)    # IN R (row D), edit, OFF
-    e.press("EXIT"); e.press("EXIT"); e.press("EXIT"); e.press("B")   # back to SYSTEM:Select, re-enter: both on
+    for k in ("SYSTEM", "B", "C"): e.press(k)            # ROSETTA -> INPUT
+    swing = [0x40, 0xC0]                                 # AN2: p-p 0x80 -> ~19 segments; AN3 constant -> 0
+    for i in range(40):
+        e.adc[0xFFE4] = swing[i & 1]; e.adc[0xFFE6] = 0x80
+        e.run(20_000)
+    lv = (e.ram[0x7060], e.ram[0x7061])
+    assert lv[0] >= 15 and lv[1] == 0, lv
+    e.press("E"); e.dial(-1, 150000)                     # SOURCE -> SI0
+    e.press("EXIT"); e.press("E"); e.dial(2, 150000)     # -> SI1 R
+    e.press("EXIT"); e.press("EXIT"); e.press("EXIT"); e.press("B")   # back to SYSTEM:Select, re-enter
     tms, dsp2 = dsplog.decode(e.dsplog)
-    ups = [(a, v) for a, v in tms.updates if a in (8, 9)]
-    assert ups == [(8, 0), (9, 0x14300000), (8, 0), (9, 0), (8, 0x14300000), (9, 0x14300000)], ups
-    return ups
+    ups = [v >> 24 for a, v in tms.updates if a == 5]
+    assert ups[0] == 0x21 and 0x1F in ups and 0x27 in ups and ups[-1] == 0x21 and         ups.index(0x1F) < ups.index(0x27), ["%02X" % u for u in ups]
+    assert not [a for a, v in tms.updates if a in (8, 9)], "c(08)/c(09) must not be touched any more"
+    return lv, ups
 
 
 if __name__ == "__main__":
@@ -174,5 +189,6 @@ if __name__ == "__main__":
     for name, lines in shots:
         print("--", name)
     print("power-on with HEX GIRL off, top text row after 0.27 s:", repr(emu_boot_skip(bytes(img), ram)))
-    print("INPUT TEST, c(08)/c(09) updates sent:", ["c(%02x)=%08X" % u for u in emu_input_test(bytes(img))])
+    lv, ups = emu_input_test(bytes(img))
+    print("INPUT page: ADC L/R segments", lv, " c(05) sent:", " ".join("%02X" % u for u in ups))
     print("x4 md5", hashlib.md5(open(out[:-4] + "_SST39SF040_x4.bin", "rb").read()).hexdigest())

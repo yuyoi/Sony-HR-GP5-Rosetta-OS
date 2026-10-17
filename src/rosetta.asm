@@ -643,7 +643,7 @@ dsc9:   RTS
 ; ================= pages =================
 s_gt:   .asciz  ">"
 s_dots: .asciz  "..."
-s_ver:  .asciz  "v0.3.4"
+s_ver:  .asciz  "v0.3.5"
 s_soon: .asciz  "SOON"
 s_lfo1: .asciz  "LFO 1"
 
@@ -698,19 +698,22 @@ pg_tempo:
 
 pg_input:
         .dw     t_input, s_live
-        .db     4, 0
+        .db     5, 0
         .dw     l_adcl
         .db     K_METER, 0
-        .dw     0xFD87, 0xFD86           ; Sony's meter bytes (0..24, updated every 5 ms tick), peak hold
+        .dw     M_ADL, M_PKL             ; CPU A/D AN2 (needs the wiring mod, src/inputtest.asm)
         .dw     l_adcr
         .db     K_METER, 0
+        .dw     M_ADR, M_PKR             ; CPU A/D AN3
+        .dw     l_dspa
+        .db     K_METER, 0
+        .dw     0xFD87, 0xFD86           ; Sony's meter bytes (from the TMS57002's c(07)), peak hold
+        .dw     l_dspb
+        .db     K_METER, 0
         .dw     0xFD89, 0xFD88
-        .dw     l_inl
-        .db     K_LIST, 1
-        .dw     V_IN_L, n_offon
-        .dw     l_inr
-        .db     K_LIST, 1
-        .dw     V_IN_R, n_offon
+        .dw     l_src
+        .db     K_LIST, 2
+        .dw     V_MSRC, n_msrc
 
 pg_boot:
         .dw     t_boot, 0
@@ -737,6 +740,7 @@ pg_about:
 
 n_waves: .dw    w_tri, w_sine, w_square, w_saw, w_random
 n_offon: .dw    o_off, o_on
+n_msrc:  .dw    m_si0, m_si1l, m_si1r
 
 t_root:   .asciz "ROSETTA OS"
 t_mod:    .asciz "MODULATION"
@@ -752,8 +756,12 @@ l_input:  .asciz "INPUT"
 s_live:   .asciz "LIVE"
 l_adcl:   .asciz "ADC L"
 l_adcr:   .asciz "ADC R"
-l_inl:    .asciz "IN L"
-l_inr:    .asciz "IN R"
+l_dspa:   .asciz "DSP A"
+l_dspb:   .asciz "DSP B"
+l_src:    .asciz "SOURCE"
+m_si0:    .asciz "SI0"
+m_si1l:   .asciz "SI1 L"
+m_si1r:   .asciz "SI1 R"
 l_wave:   .asciz "WAVE"
 l_lfo:    .asciz "LFO"
 l_block:  .asciz "BLOCK"
@@ -766,7 +774,7 @@ l_os:     .asciz "OS"
 l_by:     .asciz "BY"
 l_mascot: .asciz "MASCOT"
 l_base:   .asciz "BASE"
-v_os:     .asciz "ROSETTA 0.3.4"
+v_os:     .asciz "ROSETTA 0.3.5"
 v_by:     .asciz "JSW + CLAUDE"
 v_mascot: .asciz "HEX GIRL"
 v_base:   .asciz "SONY 1.03E"

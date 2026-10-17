@@ -93,6 +93,16 @@ ST0 = `010820`, ST1 = `000820` (status / mode words sent first).
 - c(06) is not a modulation value: it is the host-read pointer (7) that the tick rewrites.
 - The 38-tap FIR (words 51-88) runs on si1_r.
 
+**Meters that can (Rosetta v0.3.5, ROSETTA -> INPUT):**
+- **ADC L / ADC R = the raw analog channels via the CPU's own A/D.** IC506 (HD6435208A00F) pins: 45 AN0 (VBAT), 46 AN1
+  (PEDAL), **47 P62/AN2 and 48 P63/AN3 tied to AVSS (unused)**, 49 AVCC, 44 AVSS. Sony sets ADCSR = 0x31 at 0x0208
+  (scan AN0-AN1); Rosetta patches 0x33 (scan AN0-AN3), so ADDRC/ADDRD (FFE4/FFE6) follow AN2/AN3 and the pedal and
+  battery readings are unchanged. The idle loop keeps min/max, and every 8 ticks peak-to-peak becomes 24 segments (2 dB).
+  Hardware: free pins 47/48 from AVSS, then per channel: tap (AINL = IC301 pin 2 / AINR = pin 27) -> 1 uF -> ~4.7k ->
+  pin, with 10k to AVCC (pin 49) and 10k to AVSS for a 2.5 V bias.
+- **DSP A / DSP B = Sony's meter, re-aimable.** SOURCE writes c(05): SI0 (si0_l / si0_r), SI1 L (Sony's), SI1 R (si1_r).
+  This shows what IC502 forwards, no hardware needed.
+
 **What is left for the 2-input mod:** a hardware split is done (R1001 lifted). The deciding test is by ear: does DIST1
 (and the rest) sound the same with R1001 lifted? Same = the hot channel is unused by these programs and CH2 is free for
 input 2. A scope on AINR (IC301 pin 27) shows the hot channel directly.
