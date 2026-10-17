@@ -109,6 +109,12 @@ ST0 = `010820`, ST1 = `000820` (status / mode words sent first).
     for the distortions (or the tuner).
   - The rear INPUT (J101, next to the pedal jack) -> IC101(1/2) buffer -> the front jack's switch contact:
     it is the same input, used only when the front jack is empty.
+  - **Which effect reads the hot channel? Not visible from the TMS57002.** Emulator: DIST1 on/off = 64 bytes to DSP #2
+    only; changing B's type reloads the same TMS57002 program and coefficients (c(08) = c(09) = 0x14300000 for every
+    type) plus ~1.8 KB to DSP #2. The distortions live in DSP #2 (unknown instruction set).
+  - HR-MP5 (Sound on Sound review): two unbalanced input channels at -10 dBV, two effect blocks in series or
+    parallel, and it "allows for the processing of two mono signals" (dual mono). So the same DSP pair does
+    dual mono when CH2 is a real second input. Guess: the MP5 board leaves R1001 out and skips the +36 dB stage.
   - Second-input mod = lift R1001 and feed the new jack (through a coupling cap) into the CH2 side. This would
     take the hot channel away from whatever uses it, so first test what ADC R is used for (mute IN R with DIST1).
 
