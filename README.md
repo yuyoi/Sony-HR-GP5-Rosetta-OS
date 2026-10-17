@@ -23,6 +23,7 @@ your PC. Don't share dumps, builds or disassembly listings: share this repo inst
 |---|---|
 | Hex girl boot animation, then the stock boot screen | **hardware** |
 | **Rosetta OS v0.1**: factory presets stripped to one INIT program (17 KB of page 0 freed), TEST mode off, SYSTEM -> B = **ROSET** screen | **hardware** |
+| **HR-MP5 firmware on the HR-GP5**: Sony's own HR-MP5 Ver1.11 (dual-chain, stereo / dual-mono model on the same board) runs on this unit; second input via the MP5 parts (R1001 off, R1003 + L201 linked, R201 100k, C201 22 uF, R212 0 ohm). Details in [docs/DSP.md](docs/DSP.md) | **works on hardware** |
 | **Rosetta OS v0.3.5**: ROSETTA → INPUT: **raw ADC L/R meters** through the CPU's spare A/D inputs (needs a small wiring mod), and Sony's DSP meter with a SOURCE selector (see [docs/DSP.md](docs/DSP.md)) | **emulator-tested** |
 | **Rosetta OS v0.3.2**: EDGE TEST removed again (v0.3.1 probe answered it on hardware: the glass is exactly 228 x 40) | **emulator-tested** |
 | **Second input**: the board has the HR-MP5's (stereo model) input connectors unfitted, and the DSP already reads both ADC channels. Mod plan in [docs/DSP.md](docs/DSP.md) | **research** |

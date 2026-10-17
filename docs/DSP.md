@@ -106,6 +106,9 @@ ST0 = `010820`, ST1 = `000820` (status / mode words sent first).
 | rear jacks J101 | PEDAL + INPUT (REAR, into the CH1 path L101) | CH1/MONO (L101) + CH2 (R1003 -> L201); CH2's switch normals CH1 into CH2 |
 | front | guitar INPUT + RV401 + IC401 | pedal jack; dual level pot RV101 + amp IC102 |
 
+**Hardware result (2026-10-17): the stock HR-MP5 Ver1.11 ROM (an owner's dump, not in this repo) boots and runs on
+this HR-GP5.** (One false alarm on the way: a stray solder blob on the CPU's pins 33-35 gave backlight + blank screen.)
+
 **MP5-style second input on the GP5 (Sony's own footprints):** R1001 out (done); fit R1003 0 ohm, L201 4.7 uH (or a link),
 C201 22 uF/16 V, R201 100k; feed the jack's tip into the R1003 pad and break its old route to L101 (beep the tip to both
 pads first); choose the CH2 gain with R212 / R214 (0 ohm = MP5 unity for line level; stock = +36 dB clipped).
