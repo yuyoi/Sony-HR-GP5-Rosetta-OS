@@ -101,6 +101,10 @@ ST0 = `010820`, ST1 = `000820` (status / mode words sent first).
   - **R1001 = 0 ohm link CH1 -> CH2.** This is the bridge.
   - **CH2 -> IC201(1/2) amp (1 + 47k/5.6k, ~+19.5 dB) -> C210 -> R1002 0 ohm -> IC201(2/2) amp (1 + 47k/8.2k,
     ~+16.5 dB) -> R205 47 -> back-to-back zeners D201/D202 (MA8027) -> AINR** (pin 27).
+  - **Equal meter bars are expected (hardware, 2026-10-17: L and R read about the same).** The DSP packs both peaks
+    into c(07): L as bits 22..15 (c(0a) & 0x7F8000), R as c(0b) * c(0d) (0x200000 = 0.25) in the bits below. Sony's
+    tick takes bits 22..7, so the R byte shows R peak bits 16..9: **6 bits = 36 dB lower than L's window**, which is
+    exactly the analog +36 dB. The meters are normalized, so they cannot show the hot channel.
   - So ADC R is **not a spare**: it is the same guitar about +36 dB hotter and zener-clipped. It is most likely
     for the distortions (or the tuner).
   - The rear INPUT (J101, next to the pedal jack) -> IC101(1/2) buffer -> the front jack's switch contact:
