@@ -12,7 +12,7 @@ stock HR-GP5 screen appears and the unit runs as normal. It's the same boot as t
 > **Made by JunkSmithWizard (JSW) together with Claude (Anthropic's AI).** Claude did the reverse engineering
 > (H8/500 disassembly, LCD and boot-flow mapping) and wrote the tools, the frame codec and the H8/500 player.
 > JSW dumped the EPROM, drew Hex girl, called the shot to bring the Rosetta boot over, and burned and tested it on a
-> real HR-GP5. From EPROM dump to Hex girl on the screen in one day.
+> real HR-GP5. From EPROM dump to Hex girl on the screen in under an hour.
 
 **Legal:** this repo contains no Sony code or ROM data. You dump **your own** unit's EPROM and the tools patch it on
 your PC. Don't share dumps, builds or disassembly listings: share this repo instead.
