@@ -140,3 +140,25 @@ input 2. A scope on AINR (IC301 pin 27) shows the hot channel directly.
 
 **Best first step:** a Rosetta modulation engine (LFO, tempo) driving coefficient updates. It needs no new DSP code,
 it reuses a path Sony already uses, and it gives every stock effect new life.
+
+## Effect sets: HR-GP5 vs HR-MP5 (2026-10-17, from the EDIT tables)
+| | HR-GP5 1.03E (6 blocks in series) | HR-MP5 1.11 (2 chains: EQ -> EFCT, EQ -> EFCT) |
+|---|---|---|
+| dynamics | A: COMP, LIMIT, S.ATK | in EFCT1/2: COMP, LIMIT, **GATE**, S.ATK |
+| drive | B: CRNCH, OVD1-4, DIST1-2 (7) | EFCT2: one DIST, one OVD |
+| amp | F: AMP/S x4 (cab sims) | EFCT1: one AMP |
+| EQ / filter | C: E Q, EXCIT, WAH | 2 EQ blocks + EXCIT, WAH, **4PEQ, DyFIL** |
+| modulation | D: CHORS FLANG PHASE VIBRT TREML A.PAN RING ROTRY, **D.CHO D.FLN D.PHA StENS**; E: **StCHO StFLN StPHA** | EFCT1: CHORS FLANG PHASE VIBRT TREML A.PAN RING ROTRY, **ENS** |
+| pitch | D: I.PCH, **D.PCH**; E: PITCH | EFCT1: I.PCH, PITCH |
+| delay | D/E/F: MdDLY StDLY TpDLY DbDLY HdDLY SwDLY TmDLY DcDLY | both EFCTs: the same set |
+| reverb | F: HALL, ROOM, PLATE, GtREV | EFCT2: HALL, ROOM, PLATE, GtREV, **DcREV** |
+| special | D: REVRS | EFCT1: REVRS, **FREEZ, SHG**; EFCT2: **VoCNL** |
+
+**Reverb uploads (emulator capture of the DSP #2 traffic on a type change, `dsplog.decode`):**
+- Inside one firmware, HALL and ROOM are **the same DSP #2 program**: the GP5 upload is 173 chunks / 1490 B either way and only
+  **20 4-byte words differ** (MP5: 34 words). PLATE also changes one 372 B and one 54 B chunk. GtREV is a bigger upload (2.5 KB).
+- The 20 words are not in the ROM as-is: the H8 computes them (the high 16 bits vary and the low 16 bits look like opcode fields,
+  probably delay-tap offsets and coefficients). **New reverb voicings = change those words**, with no need to know DSP #2's
+  full instruction set.
+- GP5 HALL vs MP5 HALL: different uploads (173 vs 148 chunks, 21 shared chunks; the MP5 sends one 724 B program chunk).
+  The MP5's reverb is a different build of the code (relocated or rewritten for the dual chain). By ear it's unknown.
