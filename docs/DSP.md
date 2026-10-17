@@ -73,8 +73,18 @@ ST0 = `010820`, ST1 = `000820` (status / mode words sent first).
 - Parts list: two input op-amp stages (IC101, IC121) and two input mute transistors (Q121, Q122).
 - Model byte 'M' (HR-MP5 mode, 0xAC90) changes nothing here: same gains, same program. Its 6 checks are UI limits
   (e.g. a dial max 0x2E vs 0x19 at 0x33CB, a page count 7 vs 5 at 0x4085) and the boot path (0x6A34).
-- Open: what feeds the right channel on the board (same jack split to both, or the ring of a TRS jack), and whether
-  the chain after the first stage keeps L and R apart (needed for dual mono).
+- **The board is shared with the HR-MP5** (photo, 2026-10-17): next to the fitted GP5 input connector there are two
+  empty footprints marked **MP5** (CN102 vertical, CN101 along the bottom), the stereo model's input connectors. Both
+  input op-amps (IC101, IC121, 4558) and the mutes (Q121, Q122) are fitted and feed the AK5369-VS (IC301).
+  The service manual's block diagram labels the inputs "INPUT (FRONT)" and "INPUT (REAR)".
+- **2-input mod, three parts:**
+  1. Hardware: trace the MP5 pins (underside photo or continuity), split the R stage from the single jack if they
+     are bridged, add a second jack.
+  2. Effects: unknown whether the chain after the first stage keeps R separate (stereo in / near dual mono), sums
+     it (2-input mixer into one chain) or drops it (needs new DSP code; the TMS57002 is full).
+  3. Rosetta: per-input level / mute (/ pan) through c(08) / c(09).
+- Planned no-solder test: a Rosetta INPUT TEST page that mutes c(08) or c(09) alone. If the effects still sound with
+  L muted, the chain uses R on its own.
 
 ## Rosetta LFO (v0.3, emulator-tested)
 - Hooks the 5 ms system tick (vector 0xC0 -> `lfo_isr` -> Sony's handler). Every 2nd tick: phase += rate,
