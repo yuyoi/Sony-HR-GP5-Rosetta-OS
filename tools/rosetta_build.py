@@ -9,7 +9,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.3"
+VERSION = "0.3.1"
 PRESETS, PRESET_LEN = 0xB318, 0xB0
 INIT_FROM = 8                        # "Transparnt" becomes the single INIT program
 FREE0, FREE0_END = PRESETS + PRESET_LEN, 0xF7D8
@@ -79,6 +79,7 @@ def build(out):
     # 3. ROSETTA code in the freed page-0 space
     src = open(os.path.join(ROOT, "src", "rosetta.asm"), encoding="utf-8").read()
     src += "\n" + open(os.path.join(ROOT, "src", "lfo.asm"), encoding="utf-8").read()
+    src += "\n" + open(os.path.join(ROOT, "src", "edgetest.asm"), encoding="utf-8").read()
     src += "\n" + gen_tables(rom)
     a = Asm({"ROSETTA_BASE": ROSETTA_BASE, "BIG_COL": (38 - big_width(rom, "ROSETTA")) // 2})
     code = a.assemble(src)

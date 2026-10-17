@@ -23,7 +23,8 @@ your PC. Don't share dumps, builds or disassembly listings: share this repo inst
 |---|---|
 | Hex girl boot animation, then the stock boot screen | **hardware** |
 | **Rosetta OS v0.1**: factory presets stripped to one INIT program (17 KB of page 0 freed), TEST mode off, SYSTEM -> B = **ROSET** screen | **hardware** |
-| **Rosetta OS v0.3**: **LFO** on any parameter of any block (triangle/sine/square/saw/random, rate, depth), through Sony's own DSP driver | **emulator-tested** |
+| **Rosetta OS v0.3.1**: ROSETTA → EDGE TEST, an LCD probe (does the glass have pixels outside Sony's 228 x 40 picture?) | **emulator-tested** |
+| **Rosetta OS v0.3**: **LFO** on any parameter of any block (triangle/sine/square/saw/random, rate, depth), through Sony's own DSP driver | **burned, hardware test pending** |
 | **Rosetta OS v0.2**: Classic Mac page engine (folder-tab windows, 3 rows, scroll bar, edit box), ROSETTA menu: MODULATION, TEMPO (settings only so far), BOOT (Hex girl on/off, works), ABOUT. Settings kept in battery RAM | **emulator-tested** |
 | Your own boot animation: any 228 x 40 GIF in, burnable ROM out | built, emulator-verified (same player) |
 | Firmware map: CPU, LCD, boot flow, fonts, free space ([docs/FINDINGS.md](docs/FINDINGS.md)) | done |
