@@ -11,7 +11,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 PRESET_LEN = 0xB0
 
 # Everything model-specific. GP5 = HR-GP5 Ver1.03E (EPROM GP5-E1), MP5 = HR-MP5 Ver1.11 (dump rom1_11j).
@@ -45,7 +45,8 @@ PLATFORMS = {
                          (0x1FFC2, "15 fd 10 06 04 18 46 90 11 19"),                # KST_PL: program load (PLOAD stays on)
                          (0x1FFCC, "15 fd 10 06 04 18 46 7d 18 46 d1 11 19")],      # KST_CL: + coefficients, release
                   gates=[(0x14755, "gate_cw"), (0x146DC, "gate_cw2"), (0x1468B, "gate_pl"), (0x14678, "gate_cl"),
-                         (0x13E43, "gate_mr")])),
+                         (0x13E43, "gate_mr")],
+                  midi=(0x1F16, "15 ff dd 81", "midi_rx"))),                         # MIDI IN interrupt: MOV.B @FFDD,R1 -> JSR
 }
 KEYS_ITEM = """        .dw     l_keys
         .db     K_SUB, 0
@@ -160,6 +161,8 @@ def build(out, model="gp5"):
             patch(rom, addr, b"\xff" * n, code)
         for addr, lab in pf["keys"]["gates"]:
             patch(rom, addr, "15 fd 10 06 04", bytes([0x13, 0x00, sy[lab] >> 8, sy[lab] & 0xFF, 0x00]))
+        addr, old, lab = pf["keys"]["midi"]                                # every MIDI IN byte -> midi_rx (JSR + NOP)
+        patch(rom, addr, old, bytes([0x18, sy[lab] >> 8, sy[lab] & 0xFF, 0x00]))
 
     # 3a2. CPU A/D: Sony scans AN0-AN1 (battery, pedal); scan AN0-AN3 so AN2/AN3 can be the raw L/R input meters
     patch(rom, 0x0208, "15 ff e8 06 31", "15 ff e8 06 33")         # MOV.B #0x33,@ADCSR
@@ -354,6 +357,75 @@ def emu_keys_test(img, model, sy):
                 stack8=" ".join("%.3f" % a_ for a_ in amps), sony_reload_words=len(tms3.prog))
 
 
+def emu_midi_test(img, model, sy):
+    """MIDI IN on the DDS-DSP SAMPLER page: notes on any channel (running status, a clock byte mid-message) take voices
+    and sound at their pitch (replayed into tools/tms57sim.py); note off / velocity 0 / the sustain pedal / all notes
+    off let them go; a 9th key steals the oldest voice; Sony gets no MIDI while the page is open; page closed = no
+    events, Sony's MIDI as before."""
+    import dsplog, tms57sim, math
+    VK, VST, MQW, SRING = 0x7068, 0x70A4, 0x7096, 0x5A00
+    e = new_emu(img, model); e.run(1_500_000)
+    def send(bs, steps=250000):
+        e.midi_in += bs
+        e.run(len(bs) * 600 + steps)
+    def ring(): return e.ram[SRING] << 8 | e.ram[SRING + 1]
+    q0, r0 = e.ram[MQW], ring()
+    send([0x90, 60, 100])                                            # page closed: Sony only
+    assert e.ram[MQW] == q0 and ring() != r0, "page closed: queued %d, Sony ring %d -> %d" % (e.ram[MQW], r0, ring())
+    e.dsplog = []
+    mark = []
+    def tr(em, pc):
+        if pc == sy["kld_done"] and not mark: mark.append(len(em.dsplog))
+    e.trace = tr
+    for k in ("SYSTEM", "B", "A"): e.press(k)
+    assert e.ram[0x70A0] == 1 and mark, "page / program not loaded"
+    e.trace = None
+    tms, _ = dsplog.decode(e.dsplog[:mark[0]])
+    t = tms57sim.TMS(); t.load(tms.st0, tms.st1, tms.prog, [tms.cmem.get(i, 0) for i in range(256)])
+    for _ in range(66000): t.sample()                                # the boot sine fills the wavetable
+    done = [len(tms.updates)]
+    def sync(n=8192):
+        d, _ = dsplog.decode(e.dsplog)
+        for a, v in d.updates[done[0]:]:
+            t.host_update(a, v); t.sample(); t.sample()
+        done[0] = len(d.updates)
+        for _ in range(3000): t.sample()
+        y = [t.sample()[0] for _ in range(n)]
+        return [v - (1 << 24) if v & 0x800000 else v for v in y]
+    def tone(y, note):
+        fr = 44100 / 64 * 2 ** ((note - 77) / 12.0)
+        return 2 * math.hypot(sum(v * math.cos(2 * math.pi * fr * i / 44100) for i, v in enumerate(y)),
+                              sum(v * math.sin(2 * math.pi * fr * i / 44100) for i, v in enumerate(y))) / len(y) / 0x800000
+    def keys(): return {e.ram[VK + v]: e.ram[VST + v] for v in range(8) if e.ram[VK + v] != 0xFF}
+    r1 = ring()
+    send([0x94, 60, 100, 64, 100, 0xF8, 67, 100, 0x9F, 72, 80])     # ch 5 C4 E4 (clock mid-message) G4, ch 16 C5
+    k = keys()
+    assert sorted(k) == [60, 64, 67, 72] and all(s in (1, 2) for s in k.values()), k
+    y = sync()
+    amps = [tone(y, n) for n in (60, 64, 67, 72)]
+    off = tone(y, 62)
+    assert all(a > 0.01 for a in amps) and off < min(amps) / 4, (amps, off)
+    send([0x84, 60, 0, 0x94, 64, 0])                                 # note off, velocity 0
+    assert sorted(keys()) == [67, 72], keys()
+    r1 = ring()
+    send([0xB0, 64, 127, 0x80, 67, 0, 0xC0, 5])                      # pedal down: G4 held; ch 1, a program change:
+    assert e.ram[VK:VK + 8].count(0xFD) == 1, list(e.ram[VK:VK + 8])
+    assert ring() == r1, "Sony got MIDI while the page is open"     # Sony gets none of it
+    send([0xB0, 64, 0])                                              # pedal up: G4 goes
+    assert sorted(keys()) == [72], keys()
+    send([0xBA, 123, 0])                                             # all notes off (ch 11)
+    assert keys() == {}, keys()
+    send([0x93] + sum(([48 + i, 90] for i in range(9)), []))         # 9 keys, 8 voices: the oldest (48) is stolen
+    k = keys()
+    assert sorted(k) == list(range(49, 57)), sorted(k)
+    y = sync()
+    amps2 = [tone(y, n) for n in range(49, 57)]
+    assert all(a > 0.005 for a in amps2), amps2
+    send([0xB0, 120, 0])
+    assert keys() == {}, keys()
+    return dict(chord=" ".join("%.3f" % a for a in amps), off_pitch=round(off, 4), steal8=" ".join("%.3f" % a for a in amps2))
+
+
 if __name__ == "__main__":
     model = sys.argv[1] if len(sys.argv) > 1 else "gp5"
     out = os.path.join(ROOT, "build", PLATFORMS[model]["out"])
@@ -367,4 +439,5 @@ if __name__ == "__main__":
     print("INPUT page: ADC L/R segments", lv, " c(05) sent:", " ".join("%02X" % u for u in ups))
     if "keys" in PLATFORMS[model]:
         print("DDS-DSP SAMPLER:", emu_keys_test(bytes(img), model, sy))
+        print("MIDI IN:", emu_midi_test(bytes(img), model, sy))
     print("x4 md5", hashlib.md5(open(out[:-4] + "_SST39SF040_x4.bin", "rb").read()).hexdigest())

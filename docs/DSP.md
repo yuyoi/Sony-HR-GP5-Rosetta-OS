@@ -189,7 +189,7 @@ the MAME semantics incl. delay RAM and coefficient updates), checked on Sony's c
 generator + rendered WAV tests; (3) H8 side: program upload, gate Sony's TMS writes, a Rosetta KEYS page that plays test
 notes from the panel, first hardware burn; (4) MIDI note-on hook; (5) oscillators, filter, envelopes, LFO, ARP.
 
-## DDS-DSP SAMPLER (Rosetta 0.4.0, HR-MP5 build, 8 voices, emulator-tested 2026-10-17)
+## DDS-DSP SAMPLER (Rosetta 0.4.1, HR-MP5 build, 8 voices + MIDI IN, emulator-tested 2026-10-17)
 Files: `tools/tms57sim.py` (simulator + assembler), `tools/keysdsp.py` (program generator, scheduler, linker, self-test,
 H8 tables), `src/keys.asm` (page, H8 driver, gates). A first 4-voice version (per-voice oscillator layers and pans,
 commit cd5b496) was rebuilt for 8 voices:
@@ -227,5 +227,18 @@ commit cd5b496) was rebuilt for 8 voices:
 - Panel: PLAY, NOTE, CHORD (1 NOTE / OCTAVE / FIFTH / MAJOR / MINOR / MAJ 7 / MIN 7 / 8 STACK), MODE (SYNTH / SAMPLE),
   SINE / SAW / PULSE / WIDTH, SOURCE (INPUT A = si0 L, B = si1 L), RECORD, ATTACK / DECAY / SUSTAIN / RELEASE, CUTOFF /
   RESONANCE, SPREAD, VOLUME, THRU, ROOT. A voice peaks at 0.5 (4 per side without clipping).
-- Not yet: MIDI notes, the GP5 build (two copies of each TMS routine there), sample-rate check on hardware (all pitches
-  assume 44.1 kHz), no filter bypass (CUTOFF 99 = 7 kHz), no triangle wave (it is only used for the pulse).
+- **MIDI IN** (0.4.1): MIDI IN is the SCI at FFD8 (RXI vector 0xD4 -> 0x1F08). Sony's handler reads RDR at 0x1F16, drops
+  other channels unless OMNI (0x46215 channel, 0x46216 OMNI), handles F8 clock, stores the rest in its ring 0x40800 (write
+  idx 0x45A00). The build replaces that read with `JSR midi_rx ; NOP`: `midi_rx` does the read, and while the page is open
+  parses every byte on **all 16 channels** (running status, realtime bytes mid-message, SysEx / system common clear running
+  status) into a 16-event queue, and hands Sony 0xF9 instead (an undefined realtime byte it skips), so program
+  changes / controllers can't move Sony's program or screen meanwhile; page closed = Sony's MIDI as before. `keys_midi` (main loop, keys_tick) plays the queue: note on
+  takes a voice per CHORD tone (CHORD 1 NOTE = 8-voice poly), free voice first, then the oldest releasing one, then the
+  oldest; velocity scales the attack and sustain levels; note off / velocity 0; CC 64 sustain pedal; CC 120 / 123 all
+  notes off. ROOT retunes MIDI voices live, NOTE only moves the panel's PLAY chord. Emulator test (`emu_midi_test`):
+  closed page = no events; ch 5 + ch 16 notes with a clock byte mid-message sound at their pitches in the replayed
+  output; note off, velocity 0, pedal hold / release, all notes off, a 9th key stealing the oldest voice; Sony's ring
+  gets nothing (a ch 1 program change included) while the page is open, everything while it is closed.
+- Not yet: the GP5 build (two copies of each TMS routine there), sample-rate check on hardware (all pitches assume
+  44.1 kHz; MIDI 77 = fs / 64 = 689 Hz, F5 -23 cents), pitch bend, no filter bypass (CUTOFF 99 = 7 kHz), no triangle wave
+  (it is only used for the pulse).

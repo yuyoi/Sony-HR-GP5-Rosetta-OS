@@ -54,6 +54,7 @@ class Emu:
         s.fd01 = 0xFF
         s.icount = 0
         s.next_irq0 = 2000; s.next_tmr = 5000; s.next_tick = 3000
+        s.midi_in = []; s.next_midi = 0         # bytes for MIDI IN (SCI at FFD8, RXI vector 0xD4), one per 480 steps (31250 baud)
         s.trace = None
         s.adc = {0xFFE0: 0xC0, 0xFFE2: 0x00}
         s.fastloops = True
@@ -261,6 +262,11 @@ class Emu:
         if s.icount >= s.next_tmr:
             s.next_tmr = s.icount + 4000
             if mask < 7: s.exception(0xB4, 7); return
+        if s.midi_in and s.icount >= s.next_midi and mask < 6:
+            s.next_midi = s.icount + 480
+            s.onchip[0xFFDD - 0xFD00] = s.midi_in.pop(0)
+            s.onchip[0xFFDC - 0xFD00] |= 0x40   # RDRF
+            s.exception(0xD4, 6); return
 
     # ---------------- execution ----------------
     def step(s):

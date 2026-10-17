@@ -6,6 +6,8 @@
 ; through page-1 stubs (KST_CW / KST_PL / KST_CL). Leaving the page makes Sony's DSP-side copy of the program
 ; structure stale, so Sony's own program-change sequence reloads its TMS57002 program.
 ; Panel test: PLAY = hold the chord, NOTE / ROOT retune live. At load: SYNTH with a sine.
+; MIDI IN (midi_rx / keys_midi): notes on all 16 channels take voices (a CHORD per key, oldest voice stolen), velocity,
+; sustain pedal (CC 64), all notes off (CC 120 / 123).
 
         .equ K_SET, RV+0x80              ; settings, in kh_tab order
         .equ K_PLAY, K_SET+0
@@ -36,6 +38,22 @@
         .equ K_VT, RV+0xAC               ; 8 words: attack ticks left
         .equ K_SENT, RV+0xBC             ; KS_N bytes: value last sent (0xFF = send again)
         .equ K_TMP, RV+0xD0              ; 2 words scratch
+        .equ K_VK, RV+0x68               ; 8 bytes: MIDI key that owns each voice (0xFF panel / none, 0xFD held by the pedal)
+        .equ K_VN, RV+0x70               ; 8 bytes: the note each voice plays (60 = C4)
+        .equ K_VAGE, RV+0x78             ; 8 bytes: K_SEQ when the voice was taken (stealing: oldest first)
+        .equ K_VVEL, RV+0xD4             ; 8 bytes: velocity (panel 127)
+        .equ K_MST, RV+0x94              ; MIDI IN parser (midi_rx, in the interrupt): running status (0 = none)
+        .equ K_MD1, RV+0x95              ;   first data byte (0xFF = none yet)
+        .equ K_MQW, RV+0x96              ;   event queue write index (midi_rx)
+        .equ K_MQR, RV+0x97              ;   read index (keys_midi)
+        .equ K_SEQ, RV+0x98              ; voice allocation counter
+        .equ K_PED, RV+0x99              ; sustain pedal down
+        .equ K_MKEY, RV+0xDC             ; keys_midi: the event's key, value; chord tone, its note
+        .equ K_MVEL, RV+0xDD
+        .equ K_MJ, RV+0xDE
+        .equ K_MN, RV+0xDF
+        .equ K_MQ, RV+0xE0               ; 16 events x (key, value): 0-127 note (value = velocity, 0 = off),
+                                         ; 0x80 sustain pedal (value = CC 64), 0x81 all notes off
         .equ DSPCOPY, 0x1330             ; Sony's DSP-side copy of the program (page 4)
         .equ REC_TICKS, 300              ; 65536 samples = 1.49 s at 44.1 kHz
         .equ LVLMAX, 0x4000              ; a voice's full level (0.5: 4 voices per side without clipping)
@@ -299,6 +317,13 @@ ksus:   CLR.W   R1                       ; R3 = the sustain target (Q15) = LVLMA
         JSR     @lk32
         SHAR.W  R4
         MOV.W   R4,R3
+kvel:   MOV.W   R6,R0                    ; R3 = level (Q15) -> R3 = level * velocity of voice R6 / 128
+        ADD.W   #K_VVEL,R0
+        CLR.W   R4
+        MOV.B   @R0,R4
+        SWAP.B  R4
+        JSR     @mulq
+        MOV.W   R4,R3
         RTS
 
 ; ---- notes ----
@@ -321,11 +346,22 @@ kvoices:
         EXTS.B  R3
         RTS
 
-; kdl: R6 = voice -> R4:R5 = DL for NOTE - ROOT + offset (clamped to the table)
-kdl:    JSR     @kvoices
+; kpanel: R6 = voice, R3 = its chord offset -> a panel voice playing NOTE + offset at full velocity
+kpanel: MOV.W   R6,R0
+        ADD.W   #K_VK,R0
+        MOV.B   #0xFF,@R0
+        MOV.B   #127,@(K_VVEL-K_VK,R0)
         CLR.W   R1
         MOV.B   @K_NOTE,R1
         ADD.W   R3,R1
+        MOV.B   R1,@(K_VN-K_VK,R0)
+        RTS
+
+; kdl: R6 = voice -> R4:R5 = DL for its note - ROOT (clamped to the table)
+kdl:    MOV.W   R6,R0
+        ADD.W   #K_VN,R0
+        CLR.W   R1
+        MOV.B   @R0,R1
         CLR.W   R3
         MOV.B   @K_ROOT,R3
         SUB.W   R3,R1
@@ -346,8 +382,9 @@ knote_on:                                ; R6 = voice
         CLR.W   R5
         MOV.W   #KA_PH,R2                ; restart at the sample start
         JSR     @kvsend
-        MOV.W   #K_ATK,R0
         MOV.W   #LVLMAX,R3
+        JSR     @kvel
+        MOV.W   #K_ATK,R0
         JSR     @kenv
         MOV.W   R6,R0
         ADD.W   #K_VST,R0
@@ -366,7 +403,10 @@ knote_on:                                ; R6 = voice
         MOV.W   R1,@R0
         RTS
 
-knote_off:                               ; R6 = voice
+knote_off:                               ; R6 = voice (no key owns it any more)
+        MOV.W   R6,R0
+        ADD.W   #K_VK,R0
+        MOV.B   #0xFF,@R0
         MOV.W   R6,R0
         ADD.W   #K_VST,R0
         TST.B   @R0
@@ -377,7 +417,10 @@ knote_off:                               ; R6 = voice
         JSR     @kenv
 kno9:   RTS
 
-kh_chord:
+kh_chord:                                ; a new chord retriggers PLAY (MIDI keys pick it up at their next note)
+        TST.B   @K_PLAY
+        BNE     kh_play
+        RTS
 kh_play:                                 ; (re)trigger the chord, or release everything
         CLR.W   R6
 kpl1:   TST.B   @K_PLAY
@@ -385,6 +428,7 @@ kpl1:   TST.B   @K_PLAY
         JSR     @kvoices
         CMP.W   R1,R6
         BCC     kpl3
+        JSR     @kpanel
         JSR     @knote_on
         BRA     kpl4
 kpl3:   JSR     @knote_off
@@ -394,14 +438,20 @@ kpl4:   ADD.W   #1,R6
         RTS
 
 kh_note:                                 ; NOTE / ROOT: retune the sounding voices, no retrigger
-        CLR.W   R6
+        CLR.W   R6                       ; (MIDI voices keep their key, ROOT still moves them)
 knt1:   MOV.W   R6,R0
         ADD.W   #K_VST,R0
         MOV.B   @R0,R1
         BEQ     knt2
         CMP.B   #3,R1
         BEQ     knt2
-        JSR     @kdl
+        MOV.W   R6,R0
+        ADD.W   #K_VK,R0
+        CMP.B   #0xFF,@R0
+        BNE     knt3
+        JSR     @kvoices
+        JSR     @kpanel
+knt3:   JSR     @kdl
         MOV.W   #KA_DL,R2
         JSR     @kvsend
 knt2:   ADD.W   #1,R6
@@ -435,6 +485,210 @@ krl1:   MOV.W   R6,R0
 krl2:   ADD.W   #1,R6
         CMP.W   #KNV,R6
         BNE     krl1
+        RTS
+
+; ---- MIDI IN: every channel, whatever Sony's channel / OMNI setting ----
+; midi_rx: Sony's MIDI IN interrupt (0x1F16) calls here for every byte, in place of its MOV.B @FFDD,R1, and gets R1 back:
+; the byte (page closed), or 0xF9 while the page is open (an undefined realtime byte Sony skips: no program changes or
+; controllers reach Sony meanwhile). R0 is free, DP = 0 in, interrupts masked. Note on / off, the sustain pedal and all
+; notes off go into the K_MQ queue; keys_midi plays them from the main loop.
+midi_rx:
+        MOV.B   @0xFFDD,R1
+        LDC.B   #4,DP
+        TST.B   @K_OWN
+        BNE     mrx0
+        RTS
+mrx0:   JSR     @mrx_byte
+        MOV.B   #0xF9,R1
+        RTS
+mrx_byte:
+        BTST.B  #7,R1
+        BEQ     mrx2
+        CMP.B   #0xF8,R1                 ; realtime (clock ...): running status stays
+        BCC     mrx9
+        MOV.B   R1,@K_MST
+        CMP.B   #0xF0,R1
+        BCS     mrx1
+        CLR.B   @K_MST                   ; SysEx / system common: no running status
+mrx1:   MOV.B   #0xFF,@K_MD1
+mrx9:   RTS
+mrx2:   MOV.B   @K_MST,R0                ; a data byte: 8n / 9n / Bn take two
+        AND.B   #0xF0,R0
+        CMP.B   #0xB0,R0
+        BEQ     mrx3
+        AND.B   #0xE0,R0
+        CMP.B   #0x80,R0
+        BNE     mrx9
+mrx3:   CMP.B   #0xFF,@K_MD1
+        BNE     mrx4
+        MOV.B   R1,@K_MD1                ; the key / controller number
+        RTS
+mrx4:   MOV.W   R2,@-SP
+        MOV.W   R3,@-SP
+        MOV.B   @K_MD1,R2                ; R2 = event key, R3 = value
+        MOV.B   #0xFF,@K_MD1
+        MOV.B   R1,R3
+        MOV.B   @K_MST,R0
+        AND.B   #0xF0,R0
+        CMP.B   #0x90,R0
+        BEQ     mrx7
+        CMP.B   #0x80,R0
+        BNE     mrx5
+        CLR.B   R3                       ; note off = velocity 0
+        BRA     mrx7
+mrx5:   CMP.B   #64,R2                   ; controllers: sustain pedal, all notes off (120 / 123), nothing else
+        BNE     mrx6
+        MOV.B   #0x80,R2
+        BRA     mrx7
+mrx6:   CMP.B   #120,R2
+        BEQ     mrx61
+        CMP.B   #123,R2
+        BNE     mrx8
+mrx61:  MOV.B   #0x81,R2
+mrx7:   CLR.W   R0
+        MOV.B   @K_MQW,R0
+        SHLL.W  R0
+        MOV.B   R2,@(K_MQ,R0)
+        MOV.B   R3,@(K_MQ+1,R0)
+        SHLR.W  R0
+        ADD.B   #1,R0
+        AND.B   #15,R0
+        CMP.B   @K_MQR,R0
+        BEQ     mrx8                     ; full: dropped
+        MOV.B   R0,@K_MQW
+mrx8:   MOV.W   @SP+,R3
+        MOV.W   @SP+,R2
+        RTS
+
+; keys_midi (from keys_tick): play the queued events
+keys_midi:
+kmi1:   MOV.B   @K_MQR,R0
+        CMP.B   @K_MQW,R0
+        BEQ     kmi9
+        CLR.W   R2
+        MOV.B   R0,R2
+        SHLL.W  R2
+        MOV.B   @(K_MQ,R2),R1
+        MOV.B   R1,@K_MKEY
+        MOV.B   @(K_MQ+1,R2),R3
+        MOV.B   R3,@K_MVEL
+        ADD.B   #1,R0
+        AND.B   #15,R0
+        MOV.B   R0,@K_MQR
+        CMP.B   #0x80,R1
+        BEQ     kmi3
+        BCC     kmi4
+        TST.B   R3
+        BEQ     kmi2
+        JSR     @kmidi_on
+        BRA     kmi1
+kmi2:   JSR     @kmidi_off
+        BRA     kmi1
+kmi3:   JSR     @kmidi_ped
+        BRA     kmi1
+kmi4:   JSR     @kmidi_all
+        BRA     kmi1
+kmi9:   RTS
+
+kmidi_on:                                ; K_MKEY / K_MVEL: a voice per chord tone (CHORD 1 NOTE = 8-voice poly)
+        JSR     @kmidi_off               ; the same key again: its old voices let go first
+        CLR.B   @K_MJ
+kmo1:   CLR.W   R6
+        MOV.B   @K_MJ,R6
+        JSR     @kvoices                 ; R1 = chord size, R3 = this tone's offset
+        CMP.W   R1,R6
+        BCC     kmo9
+        CLR.W   R1
+        MOV.B   @K_MKEY,R1
+        ADD.W   R3,R1
+        MOV.B   R1,@K_MN
+        JSR     @kalloc                  ; R6 = the voice
+        MOV.W   R6,R0
+        ADD.W   #K_VK,R0
+        MOV.B   @K_MKEY,R1
+        MOV.B   R1,@R0
+        MOV.B   @K_MN,R1
+        MOV.B   R1,@(K_VN-K_VK,R0)
+        MOV.B   @K_MVEL,R1
+        MOV.B   R1,@(K_VVEL-K_VK,R0)
+        JSR     @knote_on
+        MOV.B   @K_MJ,R0
+        ADD.B   #1,R0
+        MOV.B   R0,@K_MJ
+        BRA     kmo1
+kmo9:   RTS
+
+kmidi_off:                               ; K_MKEY lets go (pedal down: held, 0xFD, until the pedal comes up)
+        CLR.W   R6
+kmf1:   MOV.W   R6,R0
+        ADD.W   #K_VK,R0
+        MOV.B   @K_MKEY,R1
+        CMP.B   @R0,R1
+        BNE     kmf3
+        TST.B   @K_PED
+        BEQ     kmf2
+        MOV.B   #0xFD,@R0
+        BRA     kmf3
+kmf2:   JSR     @knote_off
+kmf3:   ADD.W   #1,R6
+        CMP.W   #KNV,R6
+        BNE     kmf1
+        RTS
+
+kmidi_ped:                               ; K_MVEL = CC 64 value: >= 64 down; up lets the held voices go
+        MOV.B   @K_MVEL,R0
+        CMP.B   #64,R0
+        BCS     kpd1
+        MOV.B   #1,@K_PED
+        RTS
+kpd1:   CLR.B   @K_PED
+        MOV.B   #0xFD,@K_MKEY
+        JMP     @kmidi_off
+
+kmidi_all:                               ; all notes off: every MIDI voice lets go (the panel's PLAY chord stays)
+        CLR.B   @K_PED
+        CLR.W   R6
+kma1:   MOV.W   R6,R0
+        ADD.W   #K_VK,R0
+        CMP.B   #0xFF,@R0
+        BEQ     kma2
+        JSR     @knote_off
+kma2:   ADD.W   #1,R6
+        CMP.W   #KNV,R6
+        BNE     kma1
+        RTS
+
+; kalloc: -> R6 = the voice to take: a free one, else the oldest releasing one, else the oldest
+kalloc: CLR.W   R6
+        CLR.W   R2                       ; best score so far
+        CLR.W   R1
+kal1:   MOV.W   R1,R0
+        ADD.W   #K_VAGE,R0
+        CLR.W   R3
+        MOV.B   @K_SEQ,R3
+        SUB.B   @R0,R3                   ; age, 0..255
+        ADD.W   #1,R3
+        MOV.W   R1,R0
+        ADD.W   #K_VST,R0
+        TST.B   @R0
+        BNE     kal2
+        ADD.W   #0x200,R3
+kal2:   CMP.B   #3,@R0
+        BNE     kal3
+        ADD.W   #0x100,R3
+kal3:   CMP.W   R2,R3
+        BLS     kal4
+        MOV.W   R3,R2
+        MOV.W   R1,R6
+kal4:   ADD.W   #1,R1
+        CMP.W   #KNV,R1
+        BNE     kal1
+        MOV.B   @K_SEQ,R1
+        ADD.B   #1,R1
+        MOV.B   R1,@K_SEQ
+        MOV.W   R6,R0
+        ADD.W   #K_VAGE,R0
+        MOV.B   R1,@R0
         RTS
 
 ; ---- recording (SAMPLE) ----
@@ -474,6 +728,7 @@ keys_tick:
         LDC.B   #4,DP
         TST.B   @K_OWN
         BEQ     ktk9
+        JSR     @keys_midi
         MOV.B   @L_TICK,R0
         MOV.B   R0,R1
         SUB.B   @K_LASTT,R0              ; R0 = ticks since the last pass
@@ -554,6 +809,17 @@ kld2:   MOV.W   R0,@R1
         ADD.W   #2,R1
         CMP.W   #K_VST+8,R1
         BNE     kld2
+        MOV.W   #K_VK,R1                 ; MIDI: no keys, pedal up, parser + queue empty
+kld3:   MOV.B   #0xFF,@R1
+        MOV.B   #127,@(K_VVEL-K_VK,R1)
+        ADD.W   #1,R1
+        CMP.W   #K_VK+8,R1
+        BNE     kld3
+        CLR.B   @K_PED
+        CLR.B   @K_MST
+        MOV.B   #0xFF,@K_MD1
+        MOV.B   @K_MQW,R0
+        MOV.B   R0,@K_MQR
         MOV.B   @L_TICK,R0
         MOV.B   R0,@K_LASTT
         RTS
@@ -724,7 +990,7 @@ n_ksrc:   .dw   s_ina, s_inb
 
 t_keys:   .asciz "DDS-DSP SAMPLER"
 l_keys:   .asciz "DDS-DSP SAMPLER"
-s_keys:   .asciz "8 VOICE"
+s_keys:   .asciz "8V MIDI"
 l_kplay:  .asciz "PLAY"
 l_knote:  .asciz "NOTE"
 l_kchord: .asciz "CHORD"
