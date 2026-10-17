@@ -66,6 +66,16 @@ ST0 = `010820`, ST1 = `000820` (status / mode words sent first).
 | **New DSP #2 effects** (reverb / long delay side) | needs DSP #2's instruction set reverse-engineered first (we have its code and the protocol) | high | medium |
 | Freeze / glitch / reverse | TMS57002 delay memory + H8 control | high | medium |
 
+## Inputs: a second channel is already there (2026-10-17)
+- One ADC chip (AK5369, IC301), but the TMS57002 reads **both** of its channels: si0_l and si0_r, each with its own
+  gain (c(08) left, c(09) right). Sony sets **both to the same value (0x14300000)**, and the level meters peak both
+  (c(0a) / c(0b)). L and R stay separate in this first stage (so0_l / so0_r).
+- Parts list: two input op-amp stages (IC101, IC121) and two input mute transistors (Q121, Q122).
+- Model byte 'M' (HR-MP5 mode, 0xAC90) changes nothing here: same gains, same program. Its 6 checks are UI limits
+  (e.g. a dial max 0x2E vs 0x19 at 0x33CB, a page count 7 vs 5 at 0x4085) and the boot path (0x6A34).
+- Open: what feeds the right channel on the board (same jack split to both, or the ring of a TRS jack), and whether
+  the chain after the first stage keeps L and R apart (needed for dual mono).
+
 ## Rosetta LFO (v0.3, emulator-tested)
 - Hooks the 5 ms system tick (vector 0xC0 -> `lfo_isr` -> Sony's handler). Every 2nd tick: phase += rate,
   wave (triangle / sine / square / saw / random), value = base + depth * wave, clamped to the parameter's range.

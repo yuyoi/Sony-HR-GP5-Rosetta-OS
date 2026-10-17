@@ -1,3 +1,6 @@
+; NOT IN THE BUILD since 0.3.2 (done: the glass is exactly 228 x 40). To use again: append it in rosetta_build.py,
+; add a K_ACT root item pointing at edge_test and an l_edge "EDGE TEST" string.
+;
 ; EDGE TEST (ROSETTA menu): does the LCD glass have pixels outside Sony's 228 x 40 picture?
 ;
 ; Sony's init (0x0F58) sets the SED1335 to 38 bytes x 6 dots = 228 dots, 40 lines, dot scroll 3.

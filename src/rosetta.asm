@@ -630,14 +630,14 @@ dsc9:   RTS
 ; ================= pages =================
 s_gt:   .asciz  ">"
 s_dots: .asciz  "..."
-s_ver:  .asciz  "v0.3.1"
+s_ver:  .asciz  "v0.3.2"
 s_soon: .asciz  "SOON"
 s_lfo1: .asciz  "LFO 1"
 
         .align 2
 pg_root:
         .dw     t_root, s_ver
-        .db     5, 0
+        .db     4, 0
         .dw     l_mod
         .db     K_SUB, 0
         .dw     pg_mod, 0
@@ -650,9 +650,6 @@ pg_root:
         .dw     l_about
         .db     K_SUB, 0
         .dw     pg_about, 0
-        .dw     l_edge
-        .db     K_ACT, 0
-        .dw     edge_test, 0
 
 pg_mod:
         .dw     t_mod, s_lfo1
@@ -718,7 +715,6 @@ l_mod:    .asciz "MODULATION"
 l_tempo:  .asciz "TEMPO"
 l_boot:   .asciz "BOOT"
 l_about:  .asciz "ABOUT"
-l_edge:   .asciz "EDGE TEST"
 l_wave:   .asciz "WAVE"
 l_lfo:    .asciz "LFO"
 l_block:  .asciz "BLOCK"
@@ -731,7 +727,7 @@ l_os:     .asciz "OS"
 l_by:     .asciz "BY"
 l_mascot: .asciz "MASCOT"
 l_base:   .asciz "BASE"
-v_os:     .asciz "ROSETTA 0.3.1"
+v_os:     .asciz "ROSETTA 0.3.2"
 v_by:     .asciz "JSW + CLAUDE"
 v_mascot: .asciz "HEX GIRL"
 v_base:   .asciz "SONY 1.03E"
