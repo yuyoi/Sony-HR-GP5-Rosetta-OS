@@ -41,6 +41,8 @@
         .equ L_LAST, RV+0x44             ; byte, program offset last modulated (0xFF = none)
         .equ L_DIV, RV+0x45
         .equ L_SCAN, RV+0x46             ; byte, scratch: numeric-param counter
+        .equ L_TICK, RV+0x4C             ; byte, +1 every 5 ms tick (lfo_tick)
+        .equ L_MTICK, RV+0x4D            ; byte, L_TICK at the last live-meter redraw
         .equ NAMEBUF, RV+0x50            ; "F HALL" composed here
         .equ SETVER, 3
         .equ E_PAGE, RV+0x10             ; word: current page
@@ -60,6 +62,7 @@
         .equ K_ACT, 3
         .equ K_INFO, 4
         .equ K_DYN, 5                    ; ptr = RAM var, aux = routine: R1 = value -> R4 = text (EP set), R2 = max
+        .equ K_METER, 6                  ; ptr = level byte (page 0, 0..24), aux = peak byte; live bar (src/inputtest.asm)
 
         .org ROSETTA_BASE
 
@@ -151,8 +154,11 @@ act:    JSR     @cur_item                ; R5 = item
         CMP.B   #K_ACT,R1
         BEQ     act_act
         CMP.B   #K_INFO,R1
-        BEQ     to_loop
+        BEQ     act_sel
+        CMP.B   #K_METER,R1
+        BEQ     act_sel
         BNOT.B  #0,@E_EDIT               ; NUM / LIST: edit on / off
+act_sel:                                 ; INFO / METER: nothing to do, just show the moved selection
         JMP     @redraw_loop
 act_act:
         MOV.W   @(4,R5),R0
@@ -207,8 +213,10 @@ ke2:    SUB.B   #1,R1
         MOV.B   R2,@E_TOP
         JMP     @redraw_loop
 
-k_dial: TST.W   R4                       ; R4 = dial delta (0 = idle)
-        BEQ     to_loop
+k_dial: TST.W   R4                       ; R4 = dial delta (0 = idle: Sony calls this slot on every pass)
+        BNE     kd0
+        JMP     @k_idle                  ; live meters (src/inputtest.asm), then back to ros_loop
+kd0:
         LDC.B   #4,DP
         LDC.B   #0,EP
         BTST.B  #0,@E_EDIT
@@ -533,7 +541,10 @@ dr2:    CMP.B   #K_ACT,R1
         BNE     dr3
         MOV.W   #s_dots,R4
         JMP     @draw_right
-dr3:    MOV.W   R0,@-SP
+dr3:    CMP.B   #K_METER,R1
+        BNE     dr4
+        JMP     @draw_meter              ; R0 = row base, R5 = item
+dr4:    MOV.W   R0,@-SP
         JSR     @value_str
         MOV.W   @SP+,R0
         JSR     @draw_right
@@ -632,7 +643,7 @@ dsc9:   RTS
 ; ================= pages =================
 s_gt:   .asciz  ">"
 s_dots: .asciz  "..."
-s_ver:  .asciz  "v0.3.3"
+s_ver:  .asciz  "v0.3.4"
 s_soon: .asciz  "SOON"
 s_lfo1: .asciz  "LFO 1"
 
@@ -686,8 +697,14 @@ pg_tempo:
         .dw     V_BPM, 0
 
 pg_input:
-        .dw     t_input, s_test
-        .db     2, 0
+        .dw     t_input, s_live
+        .db     4, 0
+        .dw     l_adcl
+        .db     K_METER, 0
+        .dw     0xFD87, 0xFD86           ; Sony's meter bytes (0..24, updated every 5 ms tick), peak hold
+        .dw     l_adcr
+        .db     K_METER, 0
+        .dw     0xFD89, 0xFD88
         .dw     l_inl
         .db     K_LIST, 1
         .dw     V_IN_L, n_offon
@@ -732,7 +749,9 @@ l_boot:   .asciz "BOOT"
 l_about:  .asciz "ABOUT"
 t_input:  .asciz "INPUT"
 l_input:  .asciz "INPUT"
-s_test:   .asciz "TEST"
+s_live:   .asciz "LIVE"
+l_adcl:   .asciz "ADC L"
+l_adcr:   .asciz "ADC R"
 l_inl:    .asciz "IN L"
 l_inr:    .asciz "IN R"
 l_wave:   .asciz "WAVE"
@@ -747,7 +766,7 @@ l_os:     .asciz "OS"
 l_by:     .asciz "BY"
 l_mascot: .asciz "MASCOT"
 l_base:   .asciz "BASE"
-v_os:     .asciz "ROSETTA 0.3.3"
+v_os:     .asciz "ROSETTA 0.3.4"
 v_by:     .asciz "JSW + CLAUDE"
 v_mascot: .asciz "HEX GIRL"
 v_base:   .asciz "SONY 1.03E"

@@ -87,6 +87,11 @@ ST0 = `010820`, ST1 = `000820` (status / mode words sent first).
   live-coefficient routine (page 1 0x156B3: R1 = coefficient, R4:R5 = value; reached from page 0 via a 5-byte stub
   `JSR @0x56B3 ; PRTS` at 0x1F598). Emulator-verified traffic. If the effects still sound with L muted, the chain
   uses R on its own. Hardware result: pending.
+- **Live L/R meters, Rosetta v0.3.4: ROSETTA -> INPUT, rows A / B.** The DSP keeps peaks of the raw ADC samples
+  (c(0a) = |si0_l|, c(0b) = |si0_r|, before the c(08)/c(09) gains); Sony's 5 ms tick reads them (0x14D9A), maps them
+  through a 0..24 table (0x14C95) into **FD87 (L) / FD89 (R)**, peak hold FD86 / FD88. Sony's METER popup shows one
+  bar only. Rosetta draws both as 24-segment bars, refreshed every 8 ticks from the idle dial slot. Use: inject a test
+  signal anywhere on the input side (MP5 pins, IC101 / IC121) and watch which channel moves.
 
 ## Rosetta LFO (v0.3, emulator-tested)
 - Hooks the 5 ms system tick (vector 0xC0 -> `lfo_isr` -> Sony's handler). Every 2nd tick: phase += rate,

@@ -9,7 +9,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.3.3"
+VERSION = "0.3.4"
 PRESETS, PRESET_LEN = 0xB318, 0xB0
 INIT_FROM = 8                        # "Transparnt" becomes the single INIT program
 FREE0, FREE0_END = PRESETS + PRESET_LEN, 0xF7D8
@@ -133,7 +133,7 @@ def emu_tour(img, shots):
              ("D", "04_boot_page"), ("EDIT", "05_boot_edit"), ("dial-1", "06_boot_off"), ("EXIT", "07_boot_edit_off"),
              ("EXIT", "08_back_root"), ("A", "09_mod"), ("dial+1", None), ("EDIT", "10_mod_rate_edit"),
              ("dial+7", "11_rate_27"), ("EXIT", None), ("dial+3", "12_mod_scrolled"), ("EXIT", None),
-             ("E", "13_about"), ("EXIT", None), ("C", "15_input"), ("EDIT", None), ("dial-1", "16_input_l_off"),
+             ("E", "13_about"), ("EXIT", None), ("C", "15_input"), ("C", "15b_input_l_edit"), ("dial-1", "16_input_l_off"),
              ("EXIT", None), ("EXIT", None), ("EXIT", "14_back_to_system")]
     for k, name in steps:
         if k.startswith("dial"): e.dial(int(k[4:]), 150000)
@@ -157,9 +157,9 @@ def emu_input_test(img):
     import dsplog
     e = gp5emu.Emu(img); e.run(1_500_000)
     e.dsplog = []
-    for k in ("SYSTEM", "B", "C", "EDIT"): e.press(k)
+    for k in ("SYSTEM", "B", "C", "C"): e.press(k)        # ROSETTA -> INPUT -> IN L (row C), edit
     e.dial(-1, 150000)                                   # IN L -> OFF
-    e.press("EXIT"); e.press("B"); e.dial(-1, 150000)    # select IN R, edit, OFF
+    e.press("EXIT"); e.press("D"); e.dial(-1, 150000)    # IN R (row D), edit, OFF
     e.press("EXIT"); e.press("EXIT"); e.press("EXIT"); e.press("B")   # back to SYSTEM:Select, re-enter: both on
     tms, dsp2 = dsplog.decode(e.dsplog)
     ups = [(a, v) for a, v in tms.updates if a in (8, 9)]

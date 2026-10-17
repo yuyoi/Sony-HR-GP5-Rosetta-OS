@@ -1,4 +1,8 @@
-; INPUT TEST (ROSETTA -> INPUT): mute the AK5369's left or right channel at the DSP input.
+; INPUT (ROSETTA -> INPUT): live meters for the AK5369's two channels + mute either one at the DSP input.
+;
+; Meters: the TMS57002 keeps peaks of the raw ADC samples (c(0a) = |si0_l|, c(0b) = |si0_r|); Sony's 5 ms tick
+; reads them, maps them through a 0..24 table and leaves them at FD87 (L) / FD89 (R), peak hold FD86 / FD88.
+; Sony's own METER popup shows one bar only. The page redraws the bars every ~40 ms from the idle dial slot.
 ;
 ; The TMS57002 reads both ADC channels with their own gain: c(08) = left, c(09) = right; Sony sets both to
 ; 0x14300000. Muting one tells whether the effect chain uses the other on its own (the second-input question).
@@ -56,3 +60,103 @@ in_send:                                 ; R1 = coefficient, R4 = high word (low
         MOV.W   @SP+,R0
         LDC.W   R0,SR
         RTS
+
+; draw_meter: R0 = row base (label top, col 0), R5 = K_METER item (EP = 0). DP = 4 on return.
+; 24 segments in cols 9..32, rows +1..+5: filled 0xF0, empty = a dot on the bottom row, peak = a thin bar.
+draw_meter:
+        MOV.W   @(4,R5),R1
+        MOV.W   @(6,R5),R2
+        LDC.B   #0,DP                    ; meter bytes are in page 0 (FD80+ on-chip RAM)
+        CLR.W   R3
+        MOV.B   @R1,R3                   ; level
+        CLR.W   R1
+        MOV.B   @R2,R1                   ; peak
+        LDC.B   #4,DP
+        SUB.W   #1,R1                    ; peak segment index (0xFFFF = none)
+        ADD.W   #ROWB+9,R0
+        CLR.W   R2                       ; segment i
+dm1:    MOV.B   #0xF0,R4
+        MOV.B   R4,R5
+        CMP.W   R3,R2
+        BCS     dm3                      ; i < level: filled
+        CLR.B   R4
+        MOV.B   #0x80,R5                 ; empty: scale dot
+        CMP.W   R1,R2
+        BNE     dm3
+        MOV.B   #0x60,R4                 ; peak hold
+        MOV.B   R4,R5
+dm3:    MOV.B   R4,@R0
+        MOV.B   R4,@(ROWB,R0)
+        MOV.B   R4,@(2*ROWB,R0)
+        MOV.B   R4,@(3*ROWB,R0)
+        MOV.B   R5,@(4*ROWB,R0)
+        ADD.W   #1,R0
+        ADD.W   #1,R2
+        CMP.W   #24,R2
+        BNE     dm1
+        RTS
+
+; k_idle: no key, no dial. On the INPUT page redraw the visible meter rows every 8 ticks (~40 ms).
+k_idle:
+        LDC.B   #4,DP
+        LDC.B   #0,EP
+        MOV.W   @E_PAGE,R5
+        CMP.W   #pg_input,R5
+        BNE     ki_out
+        MOV.B   @L_TICK,R0
+        SUB.B   @L_MTICK,R0
+        CMP.B   #8,R0
+        BCS     ki_out
+        MOV.B   @L_TICK,R0
+        MOV.B   R0,@L_MTICK
+        JSR     @draw_begin
+        LDC.B   #4,DP
+        LDC.B   #0,EP
+        CLR.W   R6                       ; visible row 0..2
+ki1:    MOV.W   @E_PAGE,R5
+        CLR.W   R1
+        MOV.B   @E_TOP,R1
+        ADD.W   R6,R1                    ; item index
+        CLR.W   R2
+        MOV.B   @(4,R5),R2
+        CMP.W   R2,R1
+        BCC     ki9
+        SHLL.W  R1
+        SHLL.W  R1
+        SHLL.W  R1
+        ADD.W   R1,R5
+        ADD.W   #6,R5                    ; R5 = item
+        MOV.B   @(2,R5),R1
+        CMP.B   #K_METER,R1
+        BNE     ki8
+        MOV.W   R6,R1                    ; R0 = (12 + 9 * row) * 38, as draw_row
+        SHLL.W  R1
+        SHLL.W  R1
+        SHLL.W  R1
+        ADD.W   R6,R1
+        ADD.W   #12,R1
+        MULXU.B #ROWB,R1
+        MOV.W   R1,R0
+        MOV.W   R6,@-SP
+        MOV.W   R0,@-SP
+        JSR     @draw_meter
+        MOV.W   @SP+,R0
+        MOV.W   @SP+,R6
+        CLR.W   R1                       ; selected row: invert the bar like draw_select does
+        MOV.B   @E_SEL,R1
+        MOV.B   @E_TOP,R2
+        SUB.B   R2,R1
+        CMP.W   R6,R1
+        BNE     ki8
+        ADD.W   #ROWB+9,R0
+        MOV.W   #24,R1
+        MOV.B   #5,R2
+        MOV.B   #0xFC,R3
+        MOV.W   R6,@-SP
+        JSR     @xor_bytes
+        MOV.W   @SP+,R6
+ki8:    ADD.W   #1,R6
+        CMP.W   #3,R6
+        BNE     ki1
+ki9:    JSR     @draw_end
+ki_out: JMP     @ros_loop

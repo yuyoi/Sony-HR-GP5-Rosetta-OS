@@ -32,6 +32,9 @@ lfo_isr:
 lfo_tick:
         LDC.B   #4,DP
         LDC.B   #0,EP
+        MOV.B   @L_TICK,R0               ; tick counter (live meter refresh rate)
+        ADD.B   #1,R0
+        MOV.B   R0,@L_TICK
         CMP.W   #MAGIC,@V_MAGIC
         BNE     lt_ret
         CMP.B   #SETVER,@V_VER
