@@ -93,7 +93,20 @@ ST0 = `010820`, ST1 = `000820` (status / mode words sent first).
   bar only. Rosetta draws both as 24-segment bars, refreshed every 8 ticks from the idle dial slot. Use: inject a test
   signal anywhere on the input side (MP5 pins, IC101 / IC121) and watch which channel moves.
   **Hardware result (2026-10-17): with the guitar in the front jack both bars move.** The meters work on the real
-  unit, and the one jack feeds both ADC channels (bridged somewhere before IC101 / IC121). Next: find the bridge.
+  unit, and the one jack feeds both ADC channels (bridged somewhere before IC101 / IC121).
+- **From the service manual schematic (2-3, main board, 2026-10-17):**
+  - Front jack J401 (input board) -> IC401(2/2) buffer -> RV401 INPUT LEVEL -> IC401(1/2) amp (1 + 47k/2.7k, ~+25 dB)
+    -> CN401 / CN106 -> main board = **CH1**.
+  - **CH1 -> IC101(2/2) unity buffer -> R105 47 -> AINL** (IC301 pin 2).
+  - **R1001 = 0 ohm link CH1 -> CH2.** This is the bridge.
+  - **CH2 -> IC201(1/2) amp (1 + 47k/5.6k, ~+19.5 dB) -> C210 -> R1002 0 ohm -> IC201(2/2) amp (1 + 47k/8.2k,
+    ~+16.5 dB) -> R205 47 -> back-to-back zeners D201/D202 (MA8027) -> AINR** (pin 27).
+  - So ADC R is **not a spare**: it is the same guitar about +36 dB hotter and zener-clipped. It is most likely
+    for the distortions (or the tuner).
+  - The rear INPUT (J101, next to the pedal jack) -> IC101(1/2) buffer -> the front jack's switch contact:
+    it is the same input, used only when the front jack is empty.
+  - Second-input mod = lift R1001 and feed the new jack (through a coupling cap) into the CH2 side. This would
+    take the hot channel away from whatever uses it, so first test what ADC R is used for (mute IN R with DIST1).
 
 ## Rosetta LFO (v0.3, emulator-tested)
 - Hooks the 5 ms system tick (vector 0xC0 -> `lfo_isr` -> Sony's handler). Every 2nd tick: phase += rate,
