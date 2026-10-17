@@ -96,3 +96,25 @@ Everything here came from disassembling the stock EPROM (Ver1.03E). Addresses ar
 - Time the boot animation on hardware and calibrate --tick.
 - SysEx parser (serial RX ISRs 058F/057B) for hidden hooks; DSP chip ID + microcode upload.
 - Bigger EPROM: check whether socket pin 30 reaches CPU A17 (a 27C020 would add pages 2-3).
+
+## HR-MP5 Ver1.11 port (2026-10-17)
+Same board, different build (9.6 % identical bytes); RAM layout identical (edit buffer 0x458A0, DSP program 0x41280,
+flags 0x462E0, meters FD86-FD89). Found with `tools/port_anchors.py` + by hand; all in `src/platform_mp5.asm`:
+
+| what | GP5 | MP5 |
+|---|---|---|
+| presets (100 x 176 B) | 0xB318 | 0xB7D6 (then FF to 0xFCFF) |
+| prog_addr / _dp patch | 0x1890 / 0x18CB | 0x18AE / 0x18E9 |
+| SYSTEM:Select routine / key table | 0x481F / 0x483C | 0x483D / 0x485A |
+| select names CLOCK / MEMRY | 0x4801 / 0x4807 | 0x481F / 0x4825 |
+| EDIT page-set table | 0x8044 (57 ids) | 0x860E (54 ids) |
+| block -> EDIT id routine | 0xA5xx (6 blocks) | 0xAAED (4 blocks: 0x38/0, 0x4A/2, 0x74/0x1F, 0x86/0x21) |
+| small font | 0xA7C2 | 0xADA6 |
+| boot screen hook | 0x2558 (JSR 0x1021) | 0x2576 (JSR 0x1037) |
+| live coefficient routine | 0x156B3 | 0x14755 |
+| page-1 free | 0x1F596-0x1FFFE | 0x1FFB1-0x1FFFE only (stub at 0x1FFB2) |
+| key handlers bypass / meter | 0x0824 / 0x0960 | 0x083A / 0x0976 |
+| ui_poll_a / after_draw / save | 0x1B03 / 0x43AD / 0x3198 | 0x1B21 / 0x43CB / 0x31B6 |
+
+TEST-mode patch (0x0256), tick vector (0xC0 -> 0x04FD), ADCSR (0x0208), draw_begin/end, ui_dispatch (0x0672) are the
+same addresses. The MP5's TMS57002 program is different, so the INPUT page's c(05) SOURCE row is off on the MP5.

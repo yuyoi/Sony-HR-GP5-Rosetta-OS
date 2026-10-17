@@ -10,17 +10,6 @@
 ; Settings live in battery-backed SRAM 0x47000 (unused by Sony, checked), behind the magic 'RS'.
 ; Drawing goes straight into Sony's LCD shadow (RAM 0x40000, 6 px per byte); the IRQ0 streamer shows it.
 
-        .equ ui_dispatch, 0x0672
-        .equ key_bypass, 0x0824
-        .equ key_meter_tune, 0x0960
-        .equ scr_save, 0x3198
-        .equ scr_system_select, 0x481F
-        .equ draw_begin, 0x04C5
-        .equ draw_end, 0x04CD
-        .equ ui_poll_a, 0x1B03
-        .equ ui_poll_b, 0x0790
-        .equ ui_after_draw, 0x43AD
-        .equ FONT, 0xA7C2                ; small 7-row font, 7 bytes per char
         .equ ROWB, 38                    ; bytes per pixel row (6 px per byte)
 
 ; ---- battery-backed RAM (page 4) ----
@@ -115,7 +104,7 @@ ros_defaults_v3:
         MOV.B   #0,@V_LFO_WAVE
         MOV.B   #40,@V_LFO_RATE
         MOV.B   #50,@V_LFO_DEPTH
-        MOV.B   #5,@V_LFO_BLOCK
+        MOV.B   #LFO_DEF_BLOCK,@V_LFO_BLOCK
         MOV.B   #0,@V_LFO_PARAM
         MOV.B   #0,@V_LFO_SYNC
         MOV.B   #0xFF,@L_LAST
@@ -698,7 +687,7 @@ pg_tempo:
 
 pg_input:
         .dw     t_input, s_live
-        .db     5, 0
+        .db     INPUT_ROWS, 0
         .dw     l_adcl
         .db     K_METER, 0
         .dw     M_ADL, M_PKL             ; CPU A/D AN2 (needs the wiring mod, src/inputtest.asm)

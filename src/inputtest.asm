@@ -28,7 +28,6 @@
         .equ M_MAXL, RV+0x65
         .equ M_MINR, RV+0x66
         .equ M_MAXR, RV+0x67
-        .equ CWRITE_P1, 0x1F598
         .equ AD_AN2, 0xFFE4              ; ADDRC high byte
         .equ AD_AN3, 0xFFE6              ; ADDRD high byte
 
@@ -46,6 +45,8 @@ in_reset:                                ; ros_entry, DP = 4
 in_apply:                                ; send c(05) when SOURCE differs from what was sent
         LDC.B   #4,DP
         LDC.B   #0,EP
+        MOV.W   #HAS_MSRC,R0             ; models where c(05) is not the meter pointer: never write it
+        BEQ     ia9
         CLR.W   R2
         MOV.B   @V_MSRC,R2
         CMP.B   @L_SRCSENT,R2

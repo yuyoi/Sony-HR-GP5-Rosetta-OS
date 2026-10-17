@@ -8,8 +8,6 @@
 
         .equ EDBUF, 0x58A0
         .equ CURBUF, 0x1280
-        .equ EDTAB, 0x8044               ; 8 B per effect id: descriptor.w + 6-char name
-        .equ SONY_TICK, 0x04FD           ; Sony's 5 ms tick handler (vector 0xC0)
         .equ L_VAR, RV+0x48              ; param_find results
         .equ L_MAX, RV+0x49
         .equ L_LABEL, RV+0x4A            ; word
@@ -184,7 +182,7 @@ lr9:    RTS
 
 ; blk_entry: R1 = block 0..5 -> R3 = program offset, R4 = EDIT table entry (0 = none)   (DP=4, EP=0)
 blk_entry:
-        CMP.W   #6,R1
+        CMP.W   #NBLK,R1
         BCC     be_bad
         MOV.W   R1,R4
         SHLL.W  R4
@@ -268,7 +266,7 @@ db2:    MOV.B   R1,@R0+
 db8:    CLR.B   @R0
         MOV.W   #NAMEBUF,R4
         LDC.B   #4,EP
-        MOV.W   #5,R2
+        MOV.W   #NBLK-1,R2
         RTS
 
 dyn_param:                               ; R1 = param index -> its label (EP = 0), R2 = count - 1

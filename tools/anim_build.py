@@ -83,14 +83,15 @@ def probe_src(hi, lo, tick):
     ]
 
 
-def assemble(base, data_addr, tick, probe=False, bootflag=False):
+def assemble(base, data_addr, tick, probe=False, bootflag=False, data_page=1):
     hi, lo = lambda v: (v >> 8) & 0xFF, lambda v: v & 0xFF
+    ep = "04 %02x 8c" % data_page       # LDC.B #page,EP (frame data page)
     src = [
         ("raw", "12 3f"),               # STM.W (R0-R5),@-SP
         ("raw", "bf 98"),               # STC.W SR,@-SP
         ("raw", "0c 07 00 48"),         # ORC.W #H'0700,SR  mask IRQs: IRQ0 LCD stream must not fight our blits
         ("raw", "04 04 8d"),            # LDC.B #4,DP   (R0-R3 -> page 4 RAM)
-        ("raw", "04 01 8c"),            # LDC.B #1,EP   (R4-R5 -> page 1 ROM)
+        ("raw", ep),                    # LDC.B #page,EP   (R4-R5 -> the frame data page)
     ] + ([
         ("raw", "1d 70 00 05 52 53"),   # CMP.W #'RS',@0x7000   Rosetta settings valid?
         ("br", 0x26, "play"),           # BNE play              (no: default = play)
@@ -218,7 +219,7 @@ def assemble(base, data_addr, tick, probe=False, bootflag=False):
         ("raw", "15 fd 30 93"),         # MOV.B R3,@H'FD30:16
         ("raw", "4d 06 ae"),            # CMP.W #H'06AE,R5
         ("br", 0x26, "b1"),
-        ("raw", "04 01 8c"),            # LDC.B #1,EP
+        ("raw", ep),                    # LDC.B #page,EP
         ("raw", "04 04 8d"),            # LDC.B #4,DP
         ("raw", "cf 85"),               # MOV.W @SP+,R5
         ("raw", "19"),                  # RTS
@@ -372,20 +373,26 @@ def emulate(rom, entry, labels):
         pc = nxt
 
 
-def build(frames_px, holds, tick, out, probe=False, rom=None, bootflag=False):
-    """rom = an already-patched image to add the boot animation to (default: the stock dump)"""
+def build(frames_px, holds, tick, out, probe=False, rom=None, bootflag=False,
+          hook=HOOK, hook_orig=HOOK_ORIG, player=PLAYER, limit=None):
+    """rom = an already-patched image to add the boot animation to (default: the stock dump).
+    hook / hook_orig / player / limit: boot-screen call site, its original bytes, where the player + frames go and
+    the first byte they must not reach (default: the GP5 page-1 free space)."""
+    HOOK, HOOK_ORIG, PLAYER = hook, hook_orig, player
+    LIMIT = limit if limit is not None else globals()["LIMIT"]
+    data_page = PLAYER >> 16
     if rom is None:
         rom = bytearray(open(ROM_IN, "rb").read())
         assert hashlib.md5(rom).hexdigest() == STOCK_MD5, "input is not the stock dump"
     rom = bytearray(rom)
     assert rom[HOOK:HOOK + 6] == HOOK_ORIG, "hook bytes changed?"
-    assert all(b == 0xFF for b in rom[PLAYER:0x20000])       # 0x1F596-0x1F59F: Rosetta's page-1 stub
+    assert all(b == 0xFF for b in rom[PLAYER:LIMIT])        # (GP5: 0x1F596-0x1F59F hold Rosetta's page-1 stub)
     limit = PROBE_P1 if probe else LIMIT
     packed = [pack(p) for p in frames_px]
     holds = [max(1, min(127, h)) for h in holds]
-    code, labels, marks = assemble(PLAYER, 0, tick, probe, bootflag)          # size pass
+    code, labels, marks = assemble(PLAYER, 0, tick, probe, bootflag, data_page)          # size pass
     data_addr = PLAYER + len(code)
-    code, labels, marks = assemble(PLAYER, data_addr & 0xFFFF, tick, probe, bootflag)
+    code, labels, marks = assemble(PLAYER, data_addr & 0xFFFF, tick, probe, bootflag, data_page)
     stream = codec2.build_stream(packed, holds, data_addr)
     assert codec2.decode_stream(stream, data_addr) == list(zip(holds, packed))
     end = data_addr + len(stream)
