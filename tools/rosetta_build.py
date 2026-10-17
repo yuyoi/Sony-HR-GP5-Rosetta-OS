@@ -9,11 +9,12 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 PRESETS, PRESET_LEN = 0xB318, 0xB0
 INIT_FROM = 8                        # "Transparnt" becomes the single INIT program
 FREE0, FREE0_END = PRESETS + PRESET_LEN, 0xF7D8
 ROSETTA_BASE = 0xB3D0
+CWRITE_P1 = 0x1F598                  # page-1 stub in the FF gap before the boot player (0x1F596-0x1F59F)
 
 
 def patch(rom, addr, old, new):
@@ -79,6 +80,7 @@ def build(out):
     # 3. ROSETTA code in the freed page-0 space
     src = open(os.path.join(ROOT, "src", "rosetta.asm"), encoding="utf-8").read()
     src += "\n" + open(os.path.join(ROOT, "src", "lfo.asm"), encoding="utf-8").read()
+    src += "\n" + open(os.path.join(ROOT, "src", "inputtest.asm"), encoding="utf-8").read()
     src += "\n" + gen_tables(rom)
     a = Asm({"ROSETTA_BASE": ROSETTA_BASE, "BIG_COL": (38 - big_width(rom, "ROSETTA")) // 2})
     code = a.assemble(src)
@@ -89,6 +91,10 @@ def build(out):
     bad = a.check(bytes(rom), 0)
     assert not bad, bad
     sy = a.syms
+
+    # 3a. page-1 stub so page-0 Rosetta can PJSR Sony's live-coefficient routine (0x156B3 ends in RTS, not PRTS)
+    assert sy["CWRITE_P1"] == CWRITE_P1
+    patch(rom, CWRITE_P1, "ff ff ff ff ff", "18 56 b3 11 19")        # JSR @0x56B3 ; PRTS
 
     # 3b. 5 ms system tick (vector 0xC0) -> lfo_isr, which then jumps on to Sony's handler
     patch(rom, 0x00C0, "00 00 04 fd", bytes([0, 0, sy["lfo_isr"] >> 8, sy["lfo_isr"] & 0xFF]))
@@ -124,10 +130,11 @@ def emu_tour(img, shots):
     def snap(name):
         p = os.path.join(shots, name + ".png"); e.png(p); out.append((name, e.text().splitlines()))
     steps = [("SYSTEM", None), ("B", "01_root"), ("dial+1", "02_root_tempo"), ("dial+5", "03_root_about_scroll"),
-             ("C", "04_boot_page"), ("EDIT", "05_boot_edit"), ("dial-1", "06_boot_off"), ("EXIT", "07_boot_edit_off"),
+             ("D", "04_boot_page"), ("EDIT", "05_boot_edit"), ("dial-1", "06_boot_off"), ("EXIT", "07_boot_edit_off"),
              ("EXIT", "08_back_root"), ("A", "09_mod"), ("dial+1", None), ("EDIT", "10_mod_rate_edit"),
              ("dial+7", "11_rate_27"), ("EXIT", None), ("dial+3", "12_mod_scrolled"), ("EXIT", None),
-             ("D", "13_about"), ("EXIT", None), ("EXIT", "14_back_to_system")]
+             ("E", "13_about"), ("EXIT", None), ("C", "15_input"), ("EDIT", None), ("dial-1", "16_input_l_off"),
+             ("EXIT", None), ("EXIT", None), ("EXIT", "14_back_to_system")]
     for k, name in steps:
         if k.startswith("dial"): e.dial(int(k[4:]), 150000)
         else: e.press(k)
@@ -144,6 +151,22 @@ def emu_boot_skip(img, ram):
     return e.text().splitlines()[0]
 
 
+def emu_input_test(img):
+    """INPUT TEST: IN L off -> c(08) = 0 sent through Sony's routine; IN R off -> c(09) = 0; re-entering ROSETTA
+    turns both back on (0x14300000). Returns the decoded live coefficient updates for c(08) / c(09)."""
+    import dsplog
+    e = gp5emu.Emu(img); e.run(1_500_000)
+    e.dsplog = []
+    for k in ("SYSTEM", "B", "C", "EDIT"): e.press(k)
+    e.dial(-1, 150000)                                   # IN L -> OFF
+    e.press("EXIT"); e.press("B"); e.dial(-1, 150000)    # select IN R, edit, OFF
+    e.press("EXIT"); e.press("EXIT"); e.press("EXIT"); e.press("B")   # back to SYSTEM:Select, re-enter: both on
+    tms, dsp2 = dsplog.decode(e.dsplog)
+    ups = [(a, v) for a, v in tms.updates if a in (8, 9)]
+    assert ups == [(8, 0), (9, 0x14300000), (8, 0), (9, 0), (8, 0x14300000), (9, 0x14300000)], ups
+    return ups
+
+
 if __name__ == "__main__":
     out = os.path.join(ROOT, "build", "hrgp5_rosetta_os.bin")
     img, sy = build(out)
@@ -151,4 +174,5 @@ if __name__ == "__main__":
     for name, lines in shots:
         print("--", name)
     print("power-on with HEX GIRL off, top text row after 0.27 s:", repr(emu_boot_skip(bytes(img), ram)))
+    print("INPUT TEST, c(08)/c(09) updates sent:", ["c(%02x)=%08X" % u for u in emu_input_test(bytes(img))])
     print("x4 md5", hashlib.md5(open(out[:-4] + "_SST39SF040_x4.bin", "rb").read()).hexdigest())

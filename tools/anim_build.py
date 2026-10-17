@@ -379,7 +379,7 @@ def build(frames_px, holds, tick, out, probe=False, rom=None, bootflag=False):
         assert hashlib.md5(rom).hexdigest() == STOCK_MD5, "input is not the stock dump"
     rom = bytearray(rom)
     assert rom[HOOK:HOOK + 6] == HOOK_ORIG, "hook bytes changed?"
-    assert all(b == 0xFF for b in rom[0x1F596:0x20000])
+    assert all(b == 0xFF for b in rom[PLAYER:0x20000])       # 0x1F596-0x1F59F: Rosetta's page-1 stub
     limit = PROBE_P1 if probe else LIMIT
     packed = [pack(p) for p in frames_px]
     holds = [max(1, min(127, h)) for h in holds]

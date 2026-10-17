@@ -79,7 +79,9 @@ re1:    MOV.W   #pg_root,R0
         CLR.B   @E_TOP
         CLR.B   @E_EDIT
         CLR.B   @E_DEPTH
+        JSR     @in_reset                ; INPUT TEST: both ADC channels on
 redraw_loop:
+        JSR     @in_apply                ; INPUT TEST: send a changed mute to the DSP
         JSR     @ros_draw
 ros_loop:
         JSR     @ui_poll_a
@@ -630,20 +632,23 @@ dsc9:   RTS
 ; ================= pages =================
 s_gt:   .asciz  ">"
 s_dots: .asciz  "..."
-s_ver:  .asciz  "v0.3.2"
+s_ver:  .asciz  "v0.3.3"
 s_soon: .asciz  "SOON"
 s_lfo1: .asciz  "LFO 1"
 
         .align 2
 pg_root:
         .dw     t_root, s_ver
-        .db     4, 0
+        .db     5, 0
         .dw     l_mod
         .db     K_SUB, 0
         .dw     pg_mod, 0
         .dw     l_tempo
         .db     K_SUB, 0
         .dw     pg_tempo, 0
+        .dw     l_input
+        .db     K_SUB, 0
+        .dw     pg_input, 0
         .dw     l_boot
         .db     K_SUB, 0
         .dw     pg_boot, 0
@@ -680,6 +685,16 @@ pg_tempo:
         .db     K_NUM, 250
         .dw     V_BPM, 0
 
+pg_input:
+        .dw     t_input, s_test
+        .db     2, 0
+        .dw     l_inl
+        .db     K_LIST, 1
+        .dw     V_IN_L, n_offon
+        .dw     l_inr
+        .db     K_LIST, 1
+        .dw     V_IN_R, n_offon
+
 pg_boot:
         .dw     t_boot, 0
         .db     1, 0
@@ -715,6 +730,11 @@ l_mod:    .asciz "MODULATION"
 l_tempo:  .asciz "TEMPO"
 l_boot:   .asciz "BOOT"
 l_about:  .asciz "ABOUT"
+t_input:  .asciz "INPUT"
+l_input:  .asciz "INPUT"
+s_test:   .asciz "TEST"
+l_inl:    .asciz "IN L"
+l_inr:    .asciz "IN R"
 l_wave:   .asciz "WAVE"
 l_lfo:    .asciz "LFO"
 l_block:  .asciz "BLOCK"
@@ -727,7 +747,7 @@ l_os:     .asciz "OS"
 l_by:     .asciz "BY"
 l_mascot: .asciz "MASCOT"
 l_base:   .asciz "BASE"
-v_os:     .asciz "ROSETTA 0.3.2"
+v_os:     .asciz "ROSETTA 0.3.3"
 v_by:     .asciz "JSW + CLAUDE"
 v_mascot: .asciz "HEX GIRL"
 v_base:   .asciz "SONY 1.03E"

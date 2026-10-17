@@ -83,8 +83,10 @@ ST0 = `010820`, ST1 = `000820` (status / mode words sent first).
   2. Effects: unknown whether the chain after the first stage keeps R separate (stereo in / near dual mono), sums
      it (2-input mixer into one chain) or drops it (needs new DSP code; the TMS57002 is full).
   3. Rosetta: per-input level / mute (/ pan) through c(08) / c(09).
-- Planned no-solder test: a Rosetta INPUT TEST page that mutes c(08) or c(09) alone. If the effects still sound with
-  L muted, the chain uses R on its own.
+- **No-solder test, Rosetta v0.3.3: ROSETTA -> INPUT (IN L / IN R on/off)** mutes c(08) or c(09) alone through Sony's
+  live-coefficient routine (page 1 0x156B3: R1 = coefficient, R4:R5 = value; reached from page 0 via a 5-byte stub
+  `JSR @0x56B3 ; PRTS` at 0x1F598). Emulator-verified traffic. If the effects still sound with L muted, the chain
+  uses R on its own. Hardware result: pending.
 
 ## Rosetta LFO (v0.3, emulator-tested)
 - Hooks the 5 ms system tick (vector 0xC0 -> `lfo_isr` -> Sony's handler). Every 2nd tick: phase += rate,
