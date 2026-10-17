@@ -44,6 +44,7 @@ class Emu:
     def __init__(s, rom):
         assert len(rom) >= 0x20000
         s.rom = bytes(rom[:0x20000])
+        s.font = s.rom                          # text-layer glyph source (the GP5 small font at 0xA7C2)
         s.ram = bytearray(0x8000)               # page 4 SRAM
         s.onchip = bytearray(0x300)             # 0xFD00-0xFFFF (I/O area shadow + on-chip RAM + regs)
         s.R = [0] * 8
@@ -524,7 +525,7 @@ class Emu:
                 c = v[0x5F0 + row * CR + col]
                 if c == 0: continue
                 if 0x80 <= c < 0xA0: g = v[0x0700 + (c - 0x80) * 8:][:8]
-                else: g = s.rom[0xA7C2 + (c & 0x7F) * 7:][:7]
+                else: g = s.font[0xA7C2 + (c & 0x7F) * 7:][:7]
                 for r, gv in enumerate(g):
                     for x in range(6): px[row * 8 + r][col * 6 + x] ^= (gv >> (7 - x)) & 1
         return px
