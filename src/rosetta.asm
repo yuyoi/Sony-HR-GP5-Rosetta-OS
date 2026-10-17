@@ -186,7 +186,7 @@ k_exit: LDC.B   #4,DP
         JMP     @redraw_loop
 ke1:    MOV.B   @E_DEPTH,R1
         BNE     ke2
-        JMP     @scr_system_select       ; top level: back to SYSTEM
+        JMP     @redraw_loop             ; top level: ROSETTA is home (no Sony PLAY screen)
 ke2:    SUB.B   #1,R1
         MOV.B   R1,@E_DEPTH
         CLR.W   R0

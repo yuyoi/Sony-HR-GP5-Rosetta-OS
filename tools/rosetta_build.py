@@ -26,6 +26,7 @@ PLATFORMS = {
         edtab=0x8044, edit_end=None,
         blocks=[(0x3C, 0x00), (0x44, 0x03), (0x4C, 0x0A), (0x5C, 0x0D), (0x78, 0x23), (0x94, 0x2B)],
         base_text="SONY 1.03E",
+        play_entry=0x705F,
         anim=dict(hook=0x2558, hook_orig=bytes.fromhex("18 10 21 04 04 8d"), player=0x1F5A0, limit=0x1FFFF)),
     "mp5": dict(
         rom_in=os.path.join(ROOT, "dumps", "mp5_rom1_11j", "rom1_11j.bin"), md5="002beb9c2786500aa11818c98af6026b",
@@ -38,6 +39,7 @@ PLATFORMS = {
         edtab=0x860E, edit_end=0x35,                                                 # id 0x35 = LEVEL
         blocks=[(0x38, 0x00), (0x4A, 0x02), (0x74, 0x1F), (0x86, 0x21)],             # EQ1, EFCT1, EQ2, EFCT2
         base_text="SONY MP5 1.11",
+        play_entry=0x7069,
         anim=dict(hook=0x2576, hook_orig=bytes.fromhex("18 10 37 04 04 8d"), player=None, limit=0xFD00)),
 }
 
@@ -140,9 +142,15 @@ def build(out, model="gp5"):
     patch(rom, pf["names"][0], b"CLOCK", b"ROSET")
     patch(rom, pf["names"][1], b"MEMRY", b"     ")
 
+    # 4b. No Sony screens: Sony's PLAY loop (entered by JMP from boot and from every screen's exit) -> ROSETTA,
+    #     the stock boot logo is skipped right after Hex girl and its 700-unit hold is cut to 1
+    patch(rom, pf["play_entry"], "04 04 8d", bytes([0x10, sy["ros_entry"] >> 8, sy["ros_entry"] & 0xFF]))
+    patch(rom, 0x0653, "58 02 bc", "58 00 01")                       # MOV.W #1,R0 (hold)
+
     # 5. Hex girl boot (GP5: page-1 free space; MP5: right after the Rosetta code in page 0)
     an = dict(pf["anim"])
     if an["player"] is None: an["player"] = (hi + 16) & ~15
+    an["hook_tail"] = b"\x19\x00"                                   # RTS after the player: no stock logo
     px, durs = anim_build.load_frames(os.path.join(ROOT, "frames", "rosetta_boot.gif"))
     holds = [round(dd / 50.0) if dd else 1 for dd in durs]
     anim_build.build(px, holds, 0x4B, out, rom=rom, bootflag=True, **an)
@@ -189,6 +197,15 @@ def emu_tour(img, shots, model="gp5"):
     return out, ram
 
 
+def emu_boots_into_rosetta(img, model, sy):
+    """power-on lands in ROSETTA (top menu), never on Sony's PLAY screen; EXIT there stays in ROSETTA"""
+    e = new_emu(img, model); e.run(1_500_000)
+    assert (e.ram[0x7010] << 8 | e.ram[0x7011]) == sy["pg_root"], "not in ROSETTA after boot"
+    e.press("EXIT"); e.press("EXIT")
+    assert (e.ram[0x7010] << 8 | e.ram[0x7011]) == sy["pg_root"], "EXIT left ROSETTA"
+    return True
+
+
 def emu_boot_skip(img, ram, model="gp5"):
     """second power-on with HEX GIRL = OFF in battery RAM: the animation must be skipped"""
     e = new_emu(img, model); e.ram[:] = ram
@@ -213,7 +230,7 @@ def emu_input_test(img, model="gp5"):
     assert lv[0] >= 15 and lv[1] == 0, lv
     e.press("E"); e.dial(-1, 150000)                     # SOURCE -> SI0
     e.press("EXIT"); e.press("E"); e.dial(2, 150000)     # -> SI1 R
-    e.press("EXIT"); e.press("EXIT"); e.press("EXIT"); e.press("B")   # back to SYSTEM:Select, re-enter
+    e.press("EXIT"); e.press("EXIT"); e.press("SYSTEM"); e.press("B")   # SYSTEM:Select -> ROSET re-enters
     tms, dsp2 = dsplog.decode(e.dsplog)
     ups = [v >> 24 for a, v in tms.updates if a == 5]
     if model == "gp5":
@@ -233,6 +250,7 @@ if __name__ == "__main__":
     for name, lines in shots:
         print("--", name)
     print("power-on with HEX GIRL off, top text row after 0.27 s:", repr(emu_boot_skip(bytes(img), ram, model)))
+    print("boots into ROSETTA, EXIT stays:", emu_boots_into_rosetta(bytes(img), model, sy))
     lv, ups = emu_input_test(bytes(img), model)
     print("INPUT page: ADC L/R segments", lv, " c(05) sent:", " ".join("%02X" % u for u in ups))
     print("x4 md5", hashlib.md5(open(out[:-4] + "_SST39SF040_x4.bin", "rb").read()).hexdigest())

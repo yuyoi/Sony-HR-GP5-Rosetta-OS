@@ -374,7 +374,7 @@ def emulate(rom, entry, labels):
 
 
 def build(frames_px, holds, tick, out, probe=False, rom=None, bootflag=False,
-          hook=HOOK, hook_orig=HOOK_ORIG, player=PLAYER, limit=None):
+          hook=HOOK, hook_orig=HOOK_ORIG, player=PLAYER, limit=None, hook_tail=b"\x00\x00"):
     """rom = an already-patched image to add the boot animation to (default: the stock dump).
     hook / hook_orig / player / limit: boot-screen call site, its original bytes, where the player + frames go and
     the first byte they must not reach (default: the GP5 page-1 free space)."""
@@ -400,7 +400,7 @@ def build(frames_px, holds, tick, out, probe=False, rom=None, bootflag=False,
         sys.exit("too big: %d bytes over (stream %d B, room %d B)" % (end - limit, len(stream), limit - data_addr))
     rom[PLAYER:PLAYER + len(code)] = code
     rom[data_addr:end] = stream
-    rom[HOOK:HOOK + 6] = bytes([0x03, PLAYER >> 16, (PLAYER >> 8) & 0xFF, PLAYER & 0xFF, 0x00, 0x00])  # PJSR + NOP NOP
+    rom[HOOK:HOOK + 6] = bytes([0x03, PLAYER >> 16, (PLAYER >> 8) & 0xFF, PLAYER & 0xFF]) + hook_tail  # PJSR + NOP NOP (or RTS: skip the rest)
     rom_a17 = None
     if probe:
         assert rom[PROBE_P0] == 0xFF and rom[PROBE_P1] == 0xFF
