@@ -864,7 +864,7 @@ dsc9:   RTS
 ; ================= pages =================
 s_gt:   .asciz  ">"
 s_dots: .asciz  "..."
-s_ver:  .asciz  "v0.4.7"
+s_ver:  .asciz  "v0.4.8"
 s_soon: .asciz  "SOON"
 s_lfo1: .asciz  "LFO 1"
 
@@ -996,7 +996,7 @@ l_os:     .asciz "OS"
 l_by:     .asciz "BY"
 l_mascot: .asciz "MASCOT"
 l_base:   .asciz "BASE"
-v_os:     .asciz "ROSETTA 0.4.7"
+v_os:     .asciz "ROSETTA 0.4.8"
 v_by:     .asciz "JSW + CLAUDE"
 v_mascot: .asciz "HEX GIRL"
 v_base:   .asciz "SONY 1.03E"

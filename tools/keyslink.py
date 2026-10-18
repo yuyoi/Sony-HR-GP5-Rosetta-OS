@@ -3,7 +3,7 @@ load a TMS57002 program + coefficient image, poke single coefficients, go back t
 
 Messages (any MIDI channel):
   CC 119          >= 64 open the DDS-DSP SAMPLER page, < 64 leave it (from any ROSETTA page)
-  CC 20 .. 38     the page's settings in order (SETTINGS below), value clamped to the setting's range
+  CC 20 .. 42     the page's settings in order (SETTINGS below), value clamped to the setting's range
   notes, CC 64, CC 120 / 123   play the voices (all 16 channels)
   SysEx F0 7D 52 cmd .. F7  (7D = non-commercial, 52 = 'R'):
     10 oh ol n..  image bytes as nibble pairs (high first) at offset oh * 128 + ol of the H8's buffer
@@ -17,7 +17,7 @@ set NAME V | note N [VEL] [SECS] | rom | poke ADDR HEX
 import os, sys, time
 
 SETTINGS = ["PLAY", "NOTE", "CHORD", "MODE", "SINE", "SAW", "PULSE", "WIDTH", "SOURCE", "ATTACK", "DECAY", "SUSTAIN",
-            "RELEASE", "CUTOFF", "RESONANCE", "SPREAD", "VOLUME", "THRU", "ROOT"]
+            "RELEASE", "CUTOFF", "RESONANCE", "SPREAD", "VOLUME", "THRU", "ROOT", "VOICES", "BITS", "RATE", "GLITCH"]
 CC_PAGE, CC_FIRST = 119, 20
 HDR = [0xF0, 0x7D, 0x52]
 CHUNK = 48                                   # image bytes per SysEx message (96 nibbles)

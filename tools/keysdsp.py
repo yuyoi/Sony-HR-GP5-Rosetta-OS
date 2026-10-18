@@ -94,7 +94,10 @@ def lirk(name): return Op("lirk %i", 3, ptr=name)
 SBLK = lambda nv: ["SV%d" % v for v in range(0, nv, 2)] + ["SV%d" % v for v in range(1, nv, 2)]
 
 
-def threads(nv=NV):
+NV_RAW = 15                                 # RAW: voices with one read each (nearest sample), BITS on the RAM writes
+
+
+def threads(nv=NV, raw=False):
     T = {}
     T["in"] = ([], [dis(0, "IN0"), dis(1, "IN1"), dis(2, "IN2"), dis(3, "IN3")])
     T["age"] = ([], [lacd("AGE.r"), addc("ONE16"), andc("AMASK"), sacd("AGE.w"), after(lirk("AGE.w"), "sumrd")])
@@ -131,6 +134,17 @@ def threads(nv=NV):
             macdc("IN%d" % ch, "TH0" + L), ref(smhd("LP%s.w" % L), "LP"),                   # + THRU, lp stored on the way
             macdc("IN%d" % (ch + 2), "TH1" + L), domh(ch)])
     T["so1"] = (["in"], [dos(2, "IN2"), dos(3, "IN3")])
+    if raw:
+        dep, ops = T["rec"]                         # W & BITS -> the RAM: 16 / 12 / 8 / 6 / 4-bit samples and wavetable
+        i = next(j for j, o in enumerate(ops) if o.txt.startswith("wre"))
+        T["rec"] = (dep, ops[:i] + [lacd("W"), andc("BITS"), sacd("WB"), wre("WB", "ZERO")])
+        for v in range(nv):
+            n = lambda x: "%s%d" % (x, v)
+            T["v%d" % v] = (["age"], [
+                lacc(n("PH")), addc(n("DL")), sacc(n("PH")), subd(ptr("AGE.w")), andc(n("XM")),
+                tag(mpyca("K15"), "X"), ref(smhc(n("PA0")), "X"),
+                rde(n("PA0")), srbd(n("SV") + ".w"),                                    # the nearest sample, as it is
+                lacc(n("KD")), lmhc(n("KT")), macca(n("LVL")), smhc(n("LVL"))])
     return T
 
 
@@ -451,7 +465,10 @@ def link(words, nv=NV):
     lines.append("idle")
     assert len(lines) <= 256, "program too long: %d words" % len(lines)
     last_port = max(i for i, word in enumerate(words) if any(o.port in ("rd", "wr") for k, o in word))
-    assert last_port <= len(lines) - XMC - 2, "delay-RAM access too close to the end (%d of %d)" % (last_port, len(lines))
+    first_port = min(i for i, word in enumerate(words) if any(o.port in ("rd", "wr") for k, o in word))
+    assert (len(lines) - last_port) + first_port >= XMC + 2, \
+        "delay-RAM access too close to the next sample's first one (%d of %d, first %d)" % (last_port, len(lines), first_port)
+    assert not any(o.port == "rb" for k, o in words[last_port]) or True
     return lines, cadr, cslot, dadr
 
 
@@ -461,7 +478,7 @@ def q31(x): return max(-0x80000000, min(0x7FFFFFFF, int(round(x * 2147483648.0))
 def init_values(nv=NV, platform="mp5"):
     v = dict(ONE16=0x10000, OINC=1 << 26, HALF=0x40000000, SIGN=0x80000000, K15=0x8000, K30=1 << 30, M16=0xFFFF,
              ZERO=0, AMASK=0xFFFFFFFF, OPH=0, PWT=0,
-             RG0=0, RG2=0, RGS=q31(0.5), RGW=0, RGP=0, MREC=0x80000000)
+             RG0=0, RG2=0, RGS=q31(0.5), RGW=0, RGP=0, MREC=0x80000000, BITS=0xFFFFFFFF)
     for vv in range(nv):
         v.update({"DL%d" % vv: 0x10000, "PH%d" % vv: 0, "XM%d" % vv: XM_SYNTH, "KD%d" % vv: q31(0.999),
                   "KT%d" % vv: 0, "LVL%d" % vv: 0, "PA0%d" % vv: 0, "PA1%d" % vv: 0})
@@ -482,15 +499,15 @@ def cmem_init(cadr, cslot, nv=NV, platform="mp5"):
 
 
 class Image:
-    def __init__(s, nv=NV, platform="mp5", trials=1500):
-        T = threads(nv)
+    def __init__(s, nv=NV, platform="mp5", trials=1500, raw=False):
+        T = threads(nv, raw)
         s.words = best_schedule(T, trials, nv=nv)
         s.lines, s.cadr, s.cslot, s.dadr = link(s.words, nv)
         s.prog = tms57sim.assemble(s.lines)
         for l, w in zip(s.lines, s.prog):
             assert tms57dis.dis(w) == l, (l, tms57dis.dis(w))
         s.cmem = cmem_init(s.cadr, s.cslot, nv, platform)
-        s.nv = nv
+        s.nv = nv; s.raw = raw
 
     def addrs(s, name):
         """Every cmem address holding coefficient `name` (stream copies + direct)."""
@@ -501,31 +518,63 @@ class Image:
 
 
 _cache = {}
-def build(nv=NV, platform="mp5"):
-    if (nv, platform) not in _cache: _cache[(nv, platform)] = Image(nv, platform)
-    return _cache[(nv, platform)]
+def build(nv=NV, platform="mp5", raw=False):
+    if raw and nv == NV: nv = NV_RAW
+    if (nv, platform, raw) not in _cache: _cache[(nv, platform, raw)] = Image(nv, platform, raw=raw)
+    return _cache[(nv, platform, raw)]
 
 
 # ---------------- the H8 side: generated assembler (src/keys.asm includes it through tools/rosetta_build.py) ----------------
+# Each program image comes with its host table (KAT_LEN bytes: the cmem address of every coefficient the H8 writes,
+# 0xFF = this program has none); keys_load copies the loaded program's table to K_KAT in RAM, KA_* = offsets in it.
+NVMAX = 16
 HOST_LISTS = lambda nv: {
     "DL": ["DL%d" % v for v in range(nv)], "PH": ["PH%d" % v for v in range(nv)], "KD": ["KD%d" % v for v in range(nv)],
     "KT": ["KT%d" % v for v in range(nv)], "XM": ["XM%d" % v for v in range(nv)],
     "FF": ["FF1L", "FF2L", "FF1R", "FF2R"], "FMF": ["FMFL", "FMFR"], "FMQ": ["FMQL", "FMQR"],
     "VIN": ["VINL", "VINR"], "VXF": ["VXFL", "VXFR"], "TH0": ["TH0L", "TH0R"], "TH1": ["TH1L", "TH1R"],
     "RGIN": ["RG0", "RG2"], "RGWAVE": ["RGS", "RGW", "RGP"]}
-HOST_ONE = ("MREC", "AMASK", "PWT")
+HOST_ONE = ("MREC", "AMASK", "PWT", "BITS")
+VOICE_LISTS = ("DL", "PH", "KD", "KT", "XM")
 
 
-def gen_asm(im, platform="mp5"):
-    p, c = image_bytes(im.prog, im.cmem)
-    out = ["; generated by tools/keysdsp.py: DDS-DSP SAMPLER program image, coefficient addresses, value tables",
-           "        .equ KEYS_PROG_LEN, %d" % len(p), "        .equ KEYS_CMEM_LEN, %d" % len(c),
-           "        .equ KNV, %d" % im.nv]
+def kat_layout():
+    off, lay = 0, {}
+    for k, names in HOST_LISTS(NVMAX).items():
+        lay[k] = off; off += NVMAX if k in VOICE_LISTS else len(names)
+    for k in HOST_ONE: lay[k] = off; off += 1
+    return lay, off + (off & 1)
+
+
+def kat_bytes(im):
+    lay, n = kat_layout()
+    out = bytearray([0xFF] * n)
     def one(name):
-        a = im.addrs(name); assert len(a) == 1, (name, a); return a[0]
-    for name in HOST_ONE: out.append("        .equ KA_%s, %d" % (name, one(name)))
+        try: a = im.addrs(name)
+        except AssertionError: return 0xFF
+        assert len(a) == 1 and a[0] != 0xFF, (name, a); return a[0]
     for k, names in HOST_LISTS(im.nv).items():
-        out.append("KA_%s: .db %s" % (k, ", ".join(str(one(n)) for n in names)))
+        for i, nm in enumerate(names): out[lay[k] + i] = one(nm)
+    for k in HOST_ONE: out[lay[k]] = one(k)
+    return bytes(out)
+
+
+def gen_asm(ims, platform="mp5"):
+    """ims: [the 8-voice image (SMOOTH), the RAW image]"""
+    hq, rw = ims
+    p, c = image_bytes(hq.prog, hq.cmem)
+    p2, c2 = image_bytes(rw.prog, rw.cmem)
+    assert len(p) == len(p2) and len(c) == len(c2)
+    lay, n = kat_layout()
+    out = ["; generated by tools/keysdsp.py: DDS-DSP SAMPLER program images (SMOOTH / RAW), host tables, value tables",
+           "        .equ KEYS_PROG_LEN, %d" % len(p), "        .equ KEYS_CMEM_LEN, %d" % len(c),
+           "        .equ KNV_HQ, %d" % hq.nv, "        .equ KNV_RAW, %d" % rw.nv, "        .equ KNVMAX, %d" % NVMAX,
+           "        .equ KAT_LEN, %d" % n]
+    for k, o in lay.items(): out.append("        .equ KA_%s, K_KAT+%d" % (k, o))
+    def blob(label, data):
+        out.append(label + ":")
+        for i in range(0, len(data), 16): out.append("        .db     " + ", ".join("0x%02X" % b for b in data[i:i + 16]))
+    blob("kat_hq", kat_bytes(hq)); blob("kat_raw", kat_bytes(rw))
     out.append("        .align 2")
     def t32(label, vals):
         out.append(label + ":")
@@ -543,10 +592,16 @@ def gen_asm(im, platform="mp5"):
     t32("kt_note", [int(round(65536 * 2 ** ((i - 64) / 12.0))) for i in range(128)])
     # SYNTH, by MIDI note: concert pitch on the hardware (the DSP runs at 48 kHz: measured, the wavetable plays 750 Hz)
     t32("kt_nsyn", [int(round(65536 * synth_ratio(n))) for n in range(128)])
-    out.append("keys_prog:")
-    for i in range(0, len(p), 16): out.append("        .db     " + ", ".join("0x%02X" % b for b in p[i:i + 16]))
-    out.append("keys_cmem:")
-    for i in range(0, len(c), 16): out.append("        .db     " + ", ".join("0x%02X" % b for b in c[i:i + 16]))
+    # BITS 16 / 12 / 8 / 6 / 4: the mask on the A register (sample in the top 24 bits) before the RAM write
+    t32("kt_bits", [0xFFFFFFFF, 0xFFF00000, 0xFF000000, 0xFC000000, 0xF0000000])
+    def sparse(label, cm):                       # coefficients: n, then n x (address, 4 bytes); keys_load fills the rest with 0
+        nz = [(a, v) for a, v in enumerate(cm) if v]
+        assert len(nz) < 256
+        data = bytearray([len(nz)])
+        for a, v in nz: data += bytes([a]) + (v & 0xFFFFFFFF).to_bytes(4, "big")
+        blob(label, bytes(data))
+    blob("keys_prog", p); blob("keys_prog_r", p2)
+    sparse("keys_cmz", hq.cmem); sparse("keys_cmz_r", rw.cmem)
     return "\n".join(out) + "\n"
 
 

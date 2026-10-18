@@ -189,7 +189,7 @@ the MAME semantics incl. delay RAM and coefficient updates), checked on Sony's c
 generator + rendered WAV tests; (3) H8 side: program upload, gate Sony's TMS writes, a Rosetta KEYS page that plays test
 notes from the panel, first hardware burn; (4) MIDI note-on hook; (5) oscillators, filter, envelopes, LFO, ARP.
 
-## DDS-DSP SAMPLER (Rosetta 0.4.4, HR-MP5 build, 8 voices + MIDI IN + MIDI remote)
+## DDS-DSP SAMPLER (Rosetta 0.4.8, HR-MP5 build, 8 SMOOTH / 15 RAW voices + MIDI IN + MIDI remote)
 > **Works on hardware (0.4.4, burned 2026-10-18).** End-to-end over the audio loop, everything through the H8: rest
 > -100 dB, PLAY = F5 698.4 Hz, MIDI notes 60 / 69 / 81 / 93 within 0.4 cents, a C-E-G chord on channel 4, 8 notes at
 > once, VOLUME 0 silent, saw harmonics -6 dB / octave and CUTOFF 30 taking h8 down 40 dB, SPREAD 0 = L / R equal,
@@ -282,6 +282,18 @@ commit cd5b496) was rebuilt for 8 voices:
   unchanged then). Commands run from keys_tick; a CC that changes a setting goes through redraw_loop so the screen
   and the DSP follow. Emulator test `emu_link_test`: from the home screen, CC 119 opens, CC VOLUME reaches VIN, a
   marked image uploads and arrives byte-exact, a poke arrives, the ROM image comes back, CC 119 0 leaves.
+- **Two programs (0.4.8): VOICES 8 SMOOTH / 15 RAW.** RAW = one read per voice (the nearest sample, no
+  interpolation): 15 voices in 254 words + idle, 17 RAM accesses (>= 11 words apart), and the record mix written
+  through a BITS mask (`lacd W ; and BITS ; sacd WB ; wre WB`): 16 / 12 / 8 / 6 / 4-bit samples and wavetable.
+  16 RAW voices would need 270 words. Each program has a host table (the cmem address of every coefficient the H8
+  writes, 0xFF = none in this program, skipped by kcw); keys_load copies the loaded one to RAM (K_KAT) and sets the
+  voice count K_NV. Coefficient images are stored sparse (n x (address, value), ~450 B instead of 1024) and expanded
+  into K_BUF before the load, so both programs fit in page 0 next to Hex girl. RATE: every voice's read mask (XM)
+  loses its lowest position bits, so a position is held 2^RATE samples (sample-rate crush, pitch kept). GLITCH: the
+  H8 clears random XM bits per voice every few ticks (SYNTH: jumps inside the 64-sample cycle, SAMPLE: across the
+  recording). Live on the unit (SysEx upload): silent at rest, 15 voices A3-B4 all at -44 dB, BITS 4 lifts h3
+  from -28 to -18 dB. Emulator `emu_raw_test`: byte-exact load both ways, F5, 15 notes at once, BITS / RATE / GLITCH
+  writes. Measured too: `lmhc c ; domh` is clean (only cat1 dmem reads leak into domh).
 - Not yet: the GP5 build (two copies of each TMS routine there), sample-rate check on hardware (all pitches assume
   44.1 kHz; MIDI 77 = fs / 64 = 689 Hz, F5 -23 cents), pitch bend, no filter bypass (CUTOFF 99 = 7 kHz), no triangle wave
   (it is only used for the pulse).

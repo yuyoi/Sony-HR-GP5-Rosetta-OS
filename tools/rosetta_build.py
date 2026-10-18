@@ -11,7 +11,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.4.7"
+VERSION = "0.4.8"
 PRESET_LEN = 0xB0
 
 # Everything model-specific. GP5 = HR-GP5 Ver1.03E (EPROM GP5-E1), MP5 = HR-MP5 Ver1.11 (dump rom1_11j).
@@ -136,7 +136,7 @@ def build(out, model="gp5"):
     if has_keys:                                                     # DDS-DSP SAMPLER (src/keys.asm + tools/keysdsp.py)
         import keysdsp
         src += "\n" + open(os.path.join(ROOT, "src", "keys.asm"), encoding="utf-8").read()
-        src += "\n" + keysdsp.gen_asm(keysdsp.build(platform=model), model)
+        src += "\n" + keysdsp.gen_asm([keysdsp.build(platform=model), keysdsp.build(platform=model, raw=True)], model)
     else:
         src += "\nkeys_apply:\nkeys_boot:\n        RTS\nkeys_tick:\n        CLR.W   R0\n        RTS\n"
     src += "\n" + gen_tables(rom, pf)
@@ -380,7 +380,7 @@ def emu_midi_test(img, model, sy):
     off let them go; a 9th key steals the oldest voice; Sony gets no MIDI while the page is open; page closed = no
     events, Sony's MIDI as before."""
     import dsplog, tms57sim, math, keysdsp
-    VK, VST, MQW, SRING = 0x7068, 0x70A4, 0x7096, 0x5A00
+    VK, VST, MQW, SRING = 0x7A00, 0x7A40, 0x7096, 0x5A00
     e = new_emu(img, model); e.run(1_500_000)
     def send(bs, steps=250000):
         e.midi_in += bs
@@ -519,6 +519,82 @@ def emu_jog_test(img, model, sy):
     return dict(scrolled_to=scrolled, enc_fast12=fast, enc_slow5=slow, flipped="%04X -> %04X -> %04X" % (root[row][1], root[nxt][1], root[nxt2][1]))
 
 
+def emu_raw_test(img, model, sy):
+    """VOICES 15 RAW: the RAW program goes in byte-exact, PLAY plays F5, 15 MIDI notes sound at once, BITS / RATE /
+    GLITCH reach the DSP (RAM write mask, read masks), VOICES 8 SMOOTH brings the 8-voice program back."""
+    import dsplog, keysdsp, keyslink, tms57sim, math, re
+    hq, rw = keysdsp.build(platform=model), keysdsp.build(platform=model, raw=True)
+    e = new_emu(img, model); e.run(1_500_000)
+    e.dsplog = []
+    def send(bs, steps=400000):
+        e.midi_in += list(bs); e.run(len(bs) * 600 + steps)
+    send(keyslink.cc_page(True), 1_500_000)
+    mark = len(e.dsplog)
+    send(keyslink.cc_set("VOICES", 1), 2_000_000)
+    d1, _ = dsplog.decode(e.dsplog[mark:])
+    assert d1.loads == 1 and d1.prog[:len(rw.prog)] == rw.prog and all(d1.cmem.get(i, 0) == rw.cmem[i] for i in range(256)), \
+        "RAW program not loaded byte-exact (%d loads)" % d1.loads
+    assert e.ram[0x7AC0] == rw.nv, "K_NV %d" % e.ram[0x7AC0]
+    host = set()
+    for n in set(rw.cslot.values()) | set(rw.cadr):
+        if re.fullmatch(r"(DL|PH|KD|KT|XM)\d+|FF[12][LR]|FM[FQ][LR]|VIN[LR]|VXF[LR]|TH[01][LR]|RG[02SWP]|MREC|AMASK|PWT|BITS", n):
+            host.update(rw.addrs(n))
+    stray = sorted(set(a for a, v in d1.updates) - host)
+    assert not stray, "RAW: writes outside its host coefficients: %s" % stray
+    # sound: replay the H8's writes into the simulator
+    t = tms57sim.TMS(); t.load(d1.st0, d1.st1, d1.prog, [d1.cmem.get(i, 0) for i in range(256)])
+    for _ in range(66000): t.sample()
+    done = [len(d1.updates)]
+    def sync(n=8192):
+        d, _ = dsplog.decode(e.dsplog[mark:])
+        for a, v in d.updates[done[0]:]:
+            t.host_update(a, v); t.sample(); t.sample()
+        done[0] = len(d.updates)
+        for _ in range(3000): t.sample()
+        y = [t.sample()[0] for _ in range(n)]
+        return [v - (1 << 24) if v & 0x800000 else v for v in y], d
+    def tone(y, f):
+        return 2 * math.hypot(sum(v * math.cos(2 * math.pi * f * i / 44100) for i, v in enumerate(y)),
+                              sum(v * math.sin(2 * math.pi * f * i / 44100) for i, v in enumerate(y))) / len(y) / 0x800000
+    for nm, v in (("SPREAD", 0), ("PLAY", 1)): send(keyslink.cc_set(nm, v))
+    y, _ = sync()
+    z = [i for i in range(1, len(y)) if y[i - 1] < 0 <= y[i]]
+    f = (len(z) - 1) / ((z[-1] - z[0]) / 44100.0)
+    assert abs(f - 44100 / 64 * keysdsp.synth_ratio(77)) < 3, "RAW PLAY pitch %.1f" % f
+    send(keyslink.cc_set("PLAY", 0), 1_000_000)
+    notes = list(range(48, 48 + rw.nv))
+    send(sum(([0x90, n, 100] for n in notes), []), 1_500_000)
+    busy = [e.ram[0x7A40 + v] for v in range(rw.nv)]
+    assert all(s_ in (1, 2) for s_ in busy), "15 notes: voice states %s" % busy
+    y, _ = sync(16384)
+    amps = [tone(y, 44100 / 64 * keysdsp.synth_ratio(n)) for n in notes]
+    assert min(amps) > 0.004, ["%.3f" % a for a in amps]
+    # BITS 8, RATE 8X, GLITCH
+    lay, _ = keysdsp.kat_layout()
+    n0 = done[0]
+    send(keyslink.cc_set("BITS", 2)); send(keyslink.cc_set("RATE", 3))
+    d2, _ = dsplog.decode(e.dsplog[mark:])
+    new = d2.updates[n0:]
+    assert (rw.addrs("BITS")[0], 0xFF000000) in new, "BITS 8 not sent"
+    xm = set(a for v in range(rw.nv) for a in rw.addrs("XM%d" % v))
+    assert any(a in xm and v == 0x0038FFFF for a, v in new), "RATE 8X: XM %s" % sorted(set(v for a, v in new if a in xm))
+    n1 = len(d2.updates)
+    send(keyslink.cc_set("GLITCH", 90), 1_500_000)
+    d3, _ = dsplog.decode(e.dsplog[mark:])
+    jumps = set(v for a, v in d3.updates[n1:] if a in xm)
+    assert len(jumps) >= 3, "GLITCH: XM values %s" % sorted(jumps)
+    send(sum(([0x80, n, 0] for n in notes), []), 600000)
+    # back to 8 SMOOTH
+    m2 = len(e.dsplog)
+    send(keyslink.cc_set("VOICES", 0), 2_000_000)
+    d4, _ = dsplog.decode(e.dsplog[m2:])
+    assert d4.loads == 1 and d4.prog[:len(hq.prog)] == hq.prog and all(d4.cmem.get(i, 0) == hq.cmem[i] for i in range(256)), \
+        "8 SMOOTH not back"
+    assert e.ram[0x7AC0] == hq.nv
+    return dict(raw_words=len(rw.lines), pitch=round(f, 1), notes15="%.3f..%.3f" % (min(amps), max(amps)),
+                glitch_masks=len(jumps))
+
+
 def emu_link_test(img, model, sy):
     """The MIDI link (tools/keyslink.py) from the ROSETTA home screen: CC 119 opens the page, a CC sets VOLUME, SysEx
     uploads a marked program + coefficient image and loads it (byte-exact at the TMS57002), pokes one coefficient,
@@ -537,7 +613,7 @@ def emu_link_test(img, model, sy):
     assert d0.loads >= 1 and d0.prog[:len(im.prog)] == im.prog, "page open: our program not loaded"
     n0 = len(d0.updates)
     send(keyslink.cc_set("VOLUME", 40))
-    assert e.ram[0x7080 + 16] == 40, "CC VOLUME -> K_SET %d" % e.ram[0x7080 + 16]
+    assert e.ram[0x7A80 + 16] == 40, "CC VOLUME -> K_SET %d" % e.ram[0x7A80 + 16]
     d1, _ = dsplog.decode(e.dsplog)
     vin = set(im.addrs("VINL") + im.addrs("VINR"))
     assert any(a in vin for a, v in d1.updates[n0:]), "VOLUME not sent to VIN"
@@ -579,5 +655,6 @@ if __name__ == "__main__":
         print("DDS-DSP SAMPLER:", emu_keys_test(bytes(img), model, sy))
         print("MIDI IN:", emu_midi_test(bytes(img), model, sy))
         print("MIDI link:", emu_link_test(bytes(img), model, sy))
+        print("15 RAW:", emu_raw_test(bytes(img), model, sy))
         print("boot after power-off on the page:", emu_bootown_test(bytes(img), model, sy))
     print("x4 md5", hashlib.md5(open(out[:-4] + "_SST39SF040_x4.bin", "rb").read()).hexdigest())
