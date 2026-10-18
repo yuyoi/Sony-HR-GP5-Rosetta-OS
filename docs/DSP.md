@@ -190,8 +190,10 @@ generator + rendered WAV tests; (3) H8 side: program upload, gate Sony's TMS wri
 notes from the panel, first hardware burn; (4) MIDI note-on hook; (5) oscillators, filter, envelopes, LFO, ARP.
 
 ## DDS-DSP SAMPLER (Rosetta 0.4.4, HR-MP5 build, 8 voices + MIDI IN + MIDI remote)
-> **Hardware:** the 0.4.4 DSP program was verified on the unit over the MIDI link (silent at rest, 8 voices at
-> their pitches on both outputs, no leak) before the ROM was rebuilt. See "Measured on the hardware" below.
+> **Works on hardware (0.4.4, burned 2026-10-18).** End-to-end over the audio loop, everything through the H8: rest
+> -100 dB, PLAY = F5 698.4 Hz, MIDI notes 60 / 69 / 81 / 93 within 0.4 cents, a C-E-G chord on channel 4, 8 notes at
+> once, VOLUME 0 silent, saw harmonics -6 dB / octave and CUTOFF 30 taking h8 down 40 dB, SPREAD 0 = L / R equal,
+> release to -100 dB in 0.3 s, THRU 0 = -101 dB. See "Measured on the hardware" below for what it took.
 
 ### Measured on the hardware (2026-10-18, audio loop: unit outs -> Scarlett 6i6 rear ins 3/4 via ASIO, MIDI link)
 Probe programs uploaded with `tools/keyslink.py` (SysEx 10/11), recorded and analysed on the PC. What the real
