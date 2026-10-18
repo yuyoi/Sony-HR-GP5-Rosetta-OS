@@ -17,6 +17,13 @@ stock HR-GP5 screen appears and the unit runs as normal. It's the same boot as t
 **Legal:** this repo contains no Sony code or ROM data. You dump **your own** unit's EPROM and the tools patch it on
 your PC. Don't share dumps, builds or disassembly listings: share this repo instead.
 
+## Listen
+
+Played live on a real unit over MIDI and recorded straight off its outputs (Rosetta 0.4.8, 15-voice RAW mode, no processing after):
+
+- [audio/fifteen_voice_madness.mp3](audio/fifteen_voice_madness.mp3): 15-note chords and arpeggio storms, BITS 16 -> 4, RATE crush, a GLITCH wall
+- [audio/filter_acid.mp3](audio/filter_acid.mp3): acid line + pads, CUTOFF and RESONANCE swept live (1251 CC moves)
+
 ## Status
 
 | What | Status |
