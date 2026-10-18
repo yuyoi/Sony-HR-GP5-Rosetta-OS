@@ -11,7 +11,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.4.6"
+VERSION = "0.4.7"
 PRESET_LEN = 0xB0
 
 # Everything model-specific. GP5 = HR-GP5 Ver1.03E (EPROM GP5-E1), MP5 = HR-MP5 Ver1.11 (dump rom1_11j).
@@ -161,6 +161,7 @@ def build(out, model="gp5"):
             patch(rom, addr, b"\xff" * n, code)
         for addr, lab in pf["keys"]["gates"]:
             patch(rom, addr, "15 fd 10 06 04", bytes([0x13, 0x00, sy[lab] >> 8, sy[lab] & 0xFF, 0x00]))
+        patch(rom, 0x0213, "04 04 8d", bytes([0x18, sy["keys_reset"] >> 8, sy["keys_reset"] & 0xFF]))   # reset: K_OWN = 0
         addr, old, lab = pf["keys"]["midi"]                                # every MIDI IN byte -> midi_rx (JSR + NOP)
         patch(rom, addr, old, bytes([0x18, sy[lab] >> 8, sy[lab] & 0xFF, 0x00]))
 
@@ -444,6 +445,23 @@ def emu_midi_test(img, model, sy):
     return dict(chord=" ".join("%.3f" % a for a in amps), off_pitch=round(off, 4), steal8=" ".join("%.3f" % a for a in amps2))
 
 
+def emu_bootown_test(img, model, sy):
+    """Powered off on the DDS-DSP SAMPLER page (K_OWN left at 1 in the battery RAM): at the next power-on Sony's boot
+    TMS57002 program load must not be gated (it was: the DSP ran random program memory, loud noise at boot)."""
+    import dsplog
+    e = new_emu(img, model); e.ram[0x70A0] = 1; e.dsplog = []
+    gated = []
+    skips = {sy[l] for l in ("gpl1", "gcl1")}
+    e.trace = lambda em, pc: gated.append(pc) if pc in skips else None
+    e.run(1_000_000)                                                 # before ros_entry
+    d, _ = dsplog.decode(e.dsplog)
+    assert not gated and d.loads >= 1, "boot load gated (%d hits, %d loads)" % (len(gated), d.loads)
+    e0 = new_emu(img, model); e0.dsplog = []; e0.run(1_000_000)
+    d0, _ = dsplog.decode(e0.dsplog)
+    assert d.prog == d0.prog, "boot program differs from a clean boot"
+    return dict(boot_loads=d.loads, gated=len(gated))
+
+
 def emu_jog_test(img, model, sy):
     """The rocker (FDE8) and the encoder (FDE9) apart: a flick moves one row, held part way rows keep moving, held all
     the way the page flips to the parent menu's next / previous SUB page (and again while held), the encoder edits a
@@ -561,4 +579,5 @@ if __name__ == "__main__":
         print("DDS-DSP SAMPLER:", emu_keys_test(bytes(img), model, sy))
         print("MIDI IN:", emu_midi_test(bytes(img), model, sy))
         print("MIDI link:", emu_link_test(bytes(img), model, sy))
+        print("boot after power-off on the page:", emu_bootown_test(bytes(img), model, sy))
     print("x4 md5", hashlib.md5(open(out[:-4] + "_SST39SF040_x4.bin", "rb").read()).hexdigest())

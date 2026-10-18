@@ -842,6 +842,14 @@ ksx_n:  SHLL.W  R3
         OR.W    R0,R3
         RTS
 
+; keys_reset: Sony's reset routine calls here at every power-on (0x0213, in place of its LDC.B #4,DP after the first
+; init calls), long before Sony's boot DSP load. K_OWN is battery-backed: left at 1 from the last session (powered off
+; on this page) it gated that load, and the DSP ran random program memory until ros_entry (loud noise at boot).
+keys_reset:
+        LDC.B   #4,DP
+        CLR.B   @K_OWN
+        RTS
+
 ; power-on (ros_entry): page / link requests from before don't count
 keys_boot:
         LDC.B   #4,DP
