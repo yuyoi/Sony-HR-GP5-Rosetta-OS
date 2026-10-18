@@ -41,13 +41,18 @@
         .equ E_DEPTH, RV+0x15
         .equ E_VCOL, RV+0x16             ; scratch: item index while drawing a row
         .equ E_STACK, RV+0x18            ; 4 x (page.w, sel.b, top.b)
-        .equ J_ACC, RV+0x28              ; rocker steps not handled yet (signed, jog_take)
+        .equ J_ACC, RV+0x28              ; rocker steps not handled yet (signed, dial_hook)
         .equ J_DIR, RV+0x29              ; 0 = let go, 1 / 0xFF = held that way
         .equ J_T0, RV+0x2A               ; L_TICK when the press started
         .equ J_TL, RV+0x2B               ;   at its last step
         .equ J_TP, RV+0x2C               ;   at the last page change
         .equ J_PG, RV+0x2D               ; page changes in this press
         .equ J_TR, RV+0x2E               ;   at the last row move
+        .equ J_ROS, RV+0x2F              ; 1 = this dispatcher pass is Rosetta's (dial_hook takes the rocker out)
+        .equ E_TL, RV+0x0D               ; encoder: L_TICK at its last step
+        .equ E_MUL, RV+0x0E              ;   acceleration for that step (1 / 2 / 4, dial_edit on number rows)
+                                         ; (rate = steps / ticks since the encoder's last pass: >= 1 per 5 ticks
+                                         ;  = 40 steps/s: x2, >= 1 per 2 ticks = 100 steps/s: x4)
         .equ NUMBUF, RV+0x30
         .equ MAGIC, 0x5253
 
@@ -89,7 +94,8 @@ redraw_loop:
 ros_loop:
         JSR     @ui_poll_a
         JSR     @ui_poll_b
-        JSR     @jog_take                ; the rocker's steps out of Sony's dial sum: the dial slot only gets the encoder
+        LDC.B   #4,DP
+        MOV.B   #1,@J_ROS                ; dial_hook: this pass is ours, the dial slot only gets the encoder
         MOV.B   #12,R1                   ; dial -> slot 12 always (Sony routes it to the last A-F key's slot)
         LDC.B   #0,DP
         MOV.W   #ros_table,R0
@@ -237,7 +243,16 @@ kd2:    JSR     @sel_move
 dial_edit:
         JSR     @cur_item
         MOV.W   @(4,R5),R0               ; RAM var
-        CLR.W   R2
+        MOV.B   @(2,R5),R1               ; number rows: the encoder's acceleration (lists: one entry per click)
+        CMP.B   #K_LIST,R1
+        BEQ     de0
+        CMP.B   #2,@E_MUL
+        BCS     de0
+        SHAL.W  R4
+        CMP.B   #4,@E_MUL
+        BCS     de0
+        SHAL.W  R4
+de0:    CLR.W   R2
         MOV.B   @R0,R2
         ADD.W   R4,R2
         BPL     de1
@@ -274,7 +289,8 @@ de3:    JMP     @redraw_loop
 ; ================= rocker / encoder (separate) =================
 ; The panel has a rocker (Sony's scan: FD02 high nibble = position, +-1 / 2 / 5 / 10 steps into FDE8, repeated while
 ; held; FDEC = ticks held at full deflection) and an encoder (FD20 counter -> +-1 into FDE9). Sony's dial_delta adds
-; both. Rosetta takes the rocker's steps first (jog_take, top of ros_loop), so the dial slot only sees the encoder:
+; both. On Rosetta's pages dial_hook (patched into dial_delta) takes the rocker's steps out, so the dial slot only
+; sees the encoder:
 ;   encoder: edits the selected row's value at once (value rows), else moves the selection
 ;   rocker:  a flick = one row up / down, held part way = rows keep moving, held all the way = previous / next page
 ;            (the parent menu's other SUB pages), again every JOG_REP ticks while held
@@ -284,31 +300,78 @@ de3:    JMP     @redraw_loop
         .equ JOG_FULL, 70                ; all the way (FDEC) this long: the page changes
         .equ JOG_REP, 120                ; and again every this
 
-jog_take:                                ; FDE8 (rocker) -> J_ACC; keeps every register, DP and the interrupt mask
-        MOV.W   R0,@-SP
-        MOV.W   R1,@-SP
-        STC.W   SR,R1
-        ORC.W   #0x0700,SR               ; (the tick writes FDE8)
-        STC.B   DP,R0
-        MOV.W   R0,@-SP
+; Sony's encoder scan is patched (tools/rosetta_build.py) to add its +-1 per tick into FDE9 instead of overwriting it
+; (it cleared FDE9 every tick: steps during a redraw were lost), so FDE9 is the count since the last read.
+; dial_hook: Sony's dial_delta (0x06EF, called once per pass by ui_dispatch) jumps here. On a Rosetta pass (J_ROS,
+; set by ros_loop right before the dispatcher) the rocker's step (FDE8) goes to J_ACC for jog_tick and the dial is the
+; encoder (FDE9) alone; on Sony's own screens the sum, as before. -> R4 = the dial (Z if none), DP = 0, R5 clobbered.
+dial_hook:
+        STC.W   SR,R5
+        MOV.W   R5,@-SP
+        ORC.W   #0x0700,SR               ; (the tick writes FDE8 / FDE9)
         LDC.B   #0,DP
-        MOV.B   @0xFDE8,R0
-        BEQ     jtk9
+        CLR.W   R4
+        MOV.B   @0xFDE9,R4
+        CLR.B   @0xFDE9
+        EXTS.B  R4
+        CLR.W   R5
+        MOV.B   @0xFDE8,R5
         CLR.B   @0xFDE8
+        EXTS.B  R5
         LDC.B   #4,DP
-        ADD.B   @J_ACC,R0
-        MOV.B   R0,@J_ACC
-jtk9:   MOV.W   @SP+,R0
-        LDC.B   R0,DP
-        LDC.W   R1,SR
-        MOV.W   @SP+,R1
-        MOV.W   @SP+,R0
+        TST.B   @J_ROS
+        BEQ     dhk1
+        CLR.B   @J_ROS
+        ADD.B   @J_ACC,R5
+        MOV.B   R5,@J_ACC
+        TST.W   R4                       ; the encoder: how fast is it turning?
+        BEQ     dhk0
+        MOV.W   R2,@-SP
+        MOV.W   R3,@-SP
+        MOV.B   @L_TICK,R3
+        MOV.B   R3,R5
+        SUB.B   @E_TL,R5                 ; ticks since its last pass (jog_tick keeps it below 200)
+        MOV.B   R3,@E_TL
+        CLR.W   R2
+        MOV.B   R5,R2                    ; R2 = dt
+        MOV.W   R4,R3
+        BPL     dha
+        NEG.W   R3                       ; R3 = n, the steps in this pass
+dha:    MOV.B   #1,@E_MUL
+        MOV.W   R3,R5
+        SHLL.W  R5
+        SHLL.W  R5
+        ADD.W   R3,R5                    ; 5 n >= dt: x2
+        CMP.W   R2,R5
+        BCS     dhb
+        MOV.B   #2,@E_MUL
+        MOV.W   R3,R5
+        SHLL.W  R5                       ; 2 n >= dt: x4
+        CMP.W   R2,R5
+        BCS     dhb
+        MOV.B   #4,@E_MUL
+dhb:    MOV.W   @SP+,R3
+        MOV.W   @SP+,R2
+dhk0:   CLR.W   R5
+dhk1:   ADD.W   R5,R4
+        MOV.W   @SP+,R5
+        LDC.W   R5,SR
+        LDC.B   #0,DP
+        TST.W   R4
         RTS
 
 ; jog_tick (k_idle): -> R0 = 1 if the screen must be redrawn
 jog_tick:
         LDC.B   #4,DP
         LDC.B   #0,EP
+        MOV.B   @L_TICK,R0               ; the encoder's last pass: age kept below 200 ticks (no byte wrap)
+        SUB.B   @E_TL,R0
+        CMP.B   #200,R0
+        BCS     jgt0
+        MOV.B   @L_TICK,R0
+        SUB.B   #200,R0
+        MOV.B   R0,@E_TL
+jgt0:
         LDC.B   #0,DP
         MOV.B   @0xFDEC,R2               ; R2 = ticks at full deflection
         LDC.B   #4,DP
@@ -801,7 +864,7 @@ dsc9:   RTS
 ; ================= pages =================
 s_gt:   .asciz  ">"
 s_dots: .asciz  "..."
-s_ver:  .asciz  "v0.4.5"
+s_ver:  .asciz  "v0.4.6"
 s_soon: .asciz  "SOON"
 s_lfo1: .asciz  "LFO 1"
 
@@ -933,7 +996,7 @@ l_os:     .asciz "OS"
 l_by:     .asciz "BY"
 l_mascot: .asciz "MASCOT"
 l_base:   .asciz "BASE"
-v_os:     .asciz "ROSETTA 0.4.5"
+v_os:     .asciz "ROSETTA 0.4.6"
 v_by:     .asciz "JSW + CLAUDE"
 v_mascot: .asciz "HEX GIRL"
 v_base:   .asciz "SONY 1.03E"

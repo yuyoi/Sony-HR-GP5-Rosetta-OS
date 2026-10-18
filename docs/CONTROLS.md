@@ -45,8 +45,14 @@ follow from the scanner.
   the last value), so one step per tick whatever the speed.
 - `dial_delta` `0x006EF` returns `FDE8 + FDE9` in R4 and clears both: in Sony's screens the two do the same.
 - In the dispatcher, a non-zero delta calls the screen's slot 12 handler with R4 = delta.
-- **Rosetta (0.4.5)** takes `FDE8` out before the dispatcher (`jog_take`), so they are separate on its pages:
-  the encoder edits the selected value row at once (no EDIT), else moves the selection; the rocker: a flick = one row,
+- **Rosetta (0.4.6)** patches `dial_delta` (`0x06EF`, the same code in both firmwares) to `dial_hook`: on a Rosetta
+  pass (flag set by `ros_loop` right before the dispatcher) the rocker's step goes to the row / page logic and the
+  dial is the encoder alone; Sony's screens get the sum as before. (0.4.5 took `FDE8` out before the dispatcher, but
+  the dispatcher calls `0x2208` before it reads the dial, and rocker steps landing in that window still edited values.)
+  The encoder edits the selected value row at once (no EDIT), else moves the selection; on number rows it
+  accelerates by rate: >= 40 steps / s x2, >= 100 steps / s x4 (lists stay one entry per step). Sony's
+  encoder scan is patched to add its steps into `FDE9` (it overwrote them every tick, losing steps during redraws).
+  The rocker: a flick = one row,
   held part way = rows keep moving (after 0.4 s, every 0.15 s), held all the way 0.35 s = the parent menu's next /
   previous page, again every 0.6 s. EDIT opens a submenu, EXIT leaves it. Sony's own screens are unchanged.
 

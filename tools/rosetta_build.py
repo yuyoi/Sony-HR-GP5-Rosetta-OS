@@ -11,7 +11,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.4.5"
+VERSION = "0.4.6"
 PRESET_LEN = 0xB0
 
 # Everything model-specific. GP5 = HR-GP5 Ver1.03E (EPROM GP5-E1), MP5 = HR-MP5 Ver1.11 (dump rom1_11j).
@@ -163,6 +163,19 @@ def build(out, model="gp5"):
             patch(rom, addr, "15 fd 10 06 04", bytes([0x13, 0x00, sy[lab] >> 8, sy[lab] & 0xFF, 0x00]))
         addr, old, lab = pf["keys"]["midi"]                                # every MIDI IN byte -> midi_rx (JSR + NOP)
         patch(rom, addr, old, bytes([0x18, sy[lab] >> 8, sy[lab] & 0xFF, 0x00]))
+
+    # 3a1a. Sony's encoder scan (FD20 counter -> FDE9): add the +-1 instead of clearing and overwriting FDE9 every tick,
+    #       so encoder steps during a slow main-loop pass (a redraw) are not lost (GP5 0x1348, MP5 0x135E)
+    scan = bytes.fromhex("15fde913 15fd2081 15fdeb71 270f 2b08 15fde90601 10")
+    at = [i for i in range(len(rom) - len(scan)) if rom[i:i + len(scan)] == scan]
+    assert len(at) == 1, "encoder scan: %s" % at
+    patch(rom, at[0], "15 fd e9 13", "00 00 00 00")
+    patch(rom, at[0] + 0x10, "15 fd e9 06 01", "15 fd e9 08 00")      # ADD.B #1 ; NOP
+    patch(rom, at[0] + 0x18, "15 fd e9 06 ff", "15 fd e9 0c 00")      # ADD.B #-1 ; NOP
+
+    # 3a1b. dial_delta (0x06EF, same code in GP5 1.03E and MP5 1.11) -> JMP dial_hook: rocker and encoder apart on
+    #       Rosetta's pages (src/rosetta.asm), the sum as before on Sony's screens
+    patch(rom, 0x06EF, "04 00 8d", bytes([0x10, sy["dial_hook"] >> 8, sy["dial_hook"] & 0xFF]))
 
     # 3a2. CPU A/D: Sony scans AN0-AN1 (battery, pedal); scan AN0-AN3 so AN2/AN3 can be the raw L/R input meters
     patch(rom, 0x0208, "15 ff e8 06 31", "15 ff e8 06 33")         # MOV.B #0x33,@ADCSR
@@ -459,6 +472,23 @@ def emu_jog_test(img, model, sy):
     v0 = e.ram[ptr & 0x7FFF]
     e.dial(-1 if v0 > 0 else 1, 150000)
     assert edit() == 1 and e.ram[ptr & 0x7FFF] != v0, "encoder did not edit row %d (%d -> %d)" % (vi, v0, e.ram[ptr & 0x7FFF])
+    # the rocker never edits a value, not even in edit mode (0.4.5 on hw: it did)
+    v1 = e.ram[ptr & 0x7FFF]
+    e.rock(1); e.rock(-1)
+    e.rock(5, hold_steps=600_000); e.rock(-5, hold_steps=600_000)
+    assert e.ram[ptr & 0x7FFF] == v1 and edit() == 0, "the rocker edited row %d: %d -> %d" % (vi, v1, e.ram[ptr & 0x7FFF])
+    # encoder acceleration on a number row: fast steps count x4, slow ones x1
+    ni = next(i for i, (kk, _) in enumerate(items(pg)) if kk == 1 and img[pg + 9 + 8 * i] >= 50)
+    nptr = (img[pg + 10 + 8 * ni] << 8 | img[pg + 11 + 8 * ni]) & 0x7FFF
+    for _ in range(len(items(pg))): e.rock(-1)
+    for _ in range(ni): e.rock(1)
+    e.ram[nptr] = 10
+    for _ in range(12): e.dial(1, 6000)                              # one step per tick
+    e.run(150000); fast = e.ram[nptr] - 10
+    base = e.ram[nptr]
+    for _ in range(5): e.dial(1, 150000)
+    slow = e.ram[nptr] - base
+    assert fast >= 30 and slow == 5, "encoder acceleration: 12 fast steps +%d, 5 slow +%d" % (fast, slow)
     e.press("EXIT")
     nxt = subs[(subs.index(row) + 1) % len(subs)]; nxt2 = subs[(subs.index(row) + 2) % len(subs)]
     e.rock(10, hold_steps=560_000)
@@ -466,9 +496,9 @@ def emu_jog_test(img, model, sy):
         "full hold down: page %04X (want %04X), parent row %d" % (page(), root[nxt][1], e.ram[0x701A])
     e.rock(-10, hold_steps=560_000)
     assert page() == root[row][1], "full hold up: back to %04X, got %04X" % (root[row][1], page())
-    e.rock(10, hold_steps=1_300_000)
+    e.rock(10, hold_steps=1_500_000)
     assert page() == root[nxt2][1], "held on: two pages on, %04X want %04X" % (page(), root[nxt2][1])
-    return dict(scrolled_to=scrolled, flipped="%04X -> %04X -> %04X" % (root[row][1], root[nxt][1], root[nxt2][1]))
+    return dict(scrolled_to=scrolled, enc_fast12=fast, enc_slow5=slow, flipped="%04X -> %04X -> %04X" % (root[row][1], root[nxt][1], root[nxt2][1]))
 
 
 def emu_link_test(img, model, sy):

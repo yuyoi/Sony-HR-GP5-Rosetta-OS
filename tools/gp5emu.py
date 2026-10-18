@@ -524,7 +524,7 @@ class Emu:
         s.rocker = s.ROCK[step]; s.run(hold_steps); s.rocker = 0xF; s.run(gap_steps)
 
     def dial(s, delta, steps=40000):      # the encoder (FDE9)
-        s.onchip[0xFDE9 - 0xFD00] = delta & 0xFF; s.run(steps)
+        s.onchip[0xFDE9 - 0xFD00] = (s.onchip[0xFDE9 - 0xFD00] + delta) & 0xFF; s.run(steps)   # (Rosetta: FDE9 adds up)
 
     # ---------------- LCD render ----------------
     def pixels(s):
