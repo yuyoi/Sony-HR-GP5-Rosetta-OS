@@ -189,8 +189,8 @@ the MAME semantics incl. delay RAM and coefficient updates), checked on Sony's c
 generator + rendered WAV tests; (3) H8 side: program upload, gate Sony's TMS writes, a Rosetta KEYS page that plays test
 notes from the panel, first hardware burn; (4) MIDI note-on hook; (5) oscillators, filter, envelopes, LFO, ARP.
 
-## DDS-DSP SAMPLER (Rosetta 0.4.1, HR-MP5 build, 8 voices + MIDI IN, emulator-tested 2026-10-17)
-> **Not tested on hardware yet.** Everything below runs in our emulator + TMS57002 simulator only.
+## DDS-DSP SAMPLER (Rosetta 0.4.2, HR-MP5 build, 8 voices + MIDI IN, emulator-tested 2026-10-18)
+> **Hardware: 0.4.1 played but had a background noise (fixed in 0.4.2, see below, not on hardware yet).**
 
 Files: `tools/tms57sim.py` (simulator + assembler), `tools/keysdsp.py` (program generator, scheduler, linker, self-test,
 H8 tables), `src/keys.asm` (page, H8 driver, gates). A first 4-voice version (per-voice oscillator layers and pans,
@@ -241,6 +241,16 @@ commit cd5b496) was rebuilt for 8 voices:
   closed page = no events; ch 5 + ch 16 notes with a clock byte mid-message sound at their pitches in the replayed
   output; note off, velocity 0, pedal hold / release, all notes off, a 9th key stealing the oldest voice; Sony's ring
   gets nothing (a ch 1 program change included) while the page is open, everything while it is closed.
+- **First hardware run (0.4.1, 2026-10-18):** voices play, but a glitchy copy of the wavetable sounded all the time
+  on the page (also with PLAY off; it followed SINE; MODE SAMPLE turned it into a digital mess = the voices' reads),
+  silent in the model. Cause (fits, simulator-reproduced): each voice's level update `lacc KD ; mpy c(LVL),a ;
+  add c(KT),m ; sacc LVL` used `add c,m`, a cat1 instruction reading macc. **Sony's programs never use cat1 macc
+  reads** (every other form we use is in Sony's GP5 / MP5 programs), and MAME gives every macc reader the same
+  t - 2 stage. With `add c,m` at t - 3 the simulator gives all idle levels 0.28 and the same SINE-following
+  noise. 0.4.2: `lacc KD ; lmhc KT ; mac c(LVL),a ; smhc LVL` (lmhc / mac c,a / smhc are all in Sony's GP5 program),
+  same word count (255 + idle). The scheduler keeps a rule for cat1 macc reads (MO1_GAP: t - 1 .. t - 4 read the
+  same value), the simulator has `cat1_lag`, and the self-test runs at t - 2 / t - 3 / t - 4 with bit-identical
+  output. Same symptom as the SP-808 KEYS idle voices (hard mute fix there).
 - Not yet: the GP5 build (two copies of each TMS routine there), sample-rate check on hardware (all pitches assume
   44.1 kHz; MIDI 77 = fs / 64 = 689 Hz, F5 -23 cents), pitch bend, no filter bypass (CUTOFF 99 = 7 kHz), no triangle wave
   (it is only used for the pulse).

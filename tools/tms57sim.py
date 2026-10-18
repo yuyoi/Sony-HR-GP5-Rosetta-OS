@@ -33,6 +33,7 @@ class TMS:
         s.cmem = [0] * 256; s.dmem0 = [0] * 256; s.dmem1 = [0] * 32
         s.st0 = s.st1 = 0
         s.aacc = 0; s.macc = s.macc_read = s.macc_write = 0; s.creg = 0
+        s.cat1_lag = 2; s.macc_hist = [0, 0, 0]; s.macc_h4 = 0   # cat1 macc readers ('add c,m'): stage t - cat1_lag
         s.pc = s.ca = s.id = s.ba0 = s.ba1 = 0
         s.xba = s.xoa = s.xwr = s.xrd = s.txrd = s.xm_adr = 0
         s.reading = s.writing = False
@@ -163,6 +164,8 @@ class TMS:
     def step(s):
         w = s.prog[s.pc]; ipc = s.pc
         if s.reading or s.writing: s.xm_step()
+        s.macc_h4 = s.macc_hist[2]                          # end of t-4
+        s.macc_hist = [s.macc, s.macc_write, s.macc_read]   # end of t-1, t-2, t-3 (before this word's shift)
         s.macc_read = s.macc_write; s.macc_write = s.macc
         s.branch = None
         fa = w >> 18; c2 = (w >> 11) & 0x7F
@@ -239,6 +242,12 @@ class TMS:
         elif op == 0x02: s.wa(-S(s.a()))
         elif op == 0x03: s.wa(S(s.d(w)) + S(s.a()))
         elif op == 0x04: s.wa(S(s.cval(w)) + S(s.a()))
+        elif op in (0x05, 0x06, 0x0b, 0x0c) and s.cat1_lag != 2:    # (unproven stage: see keysdsp.MO1_GAP)
+            keep = s.macc_read
+            s.macc_read = s.macc_hist[s.cat1_lag - 1] if s.cat1_lag <= 3 else s.macc_h4
+            s.cat1_lag, lag = 2, s.cat1_lag
+            try: s.cat1(op, w)
+            finally: s.cat1_lag = lag; s.macc_read = keep
         elif op == 0x05: s.wa(S(s.dsfai(w)) + (s.mo() >> 16))
         elif op == 0x06: s.wa(S(s.cval(w)) + (s.mo() >> 16))
         elif op == 0x07: s.wa(S(s.d(w)) + S(s.cval(w)))

@@ -58,7 +58,7 @@ def lacd(d): return C1("lacd %d", d=d, a="w")
 def addc(c): return C1("add %c,a", c=c, a="rw")
 def subc(c): return C1("sub %c,a", c=c, a="rw")          # c - a
 def subd(d): return C1("sub %d,a", d=d, a="rw")          # d - a
-def addcm(c): return C1("add %c,m", c=c, a="w", m="mo")   # a = c + (mo >> 16)
+def addcm(c): return C1("add %c,m", c=c, a="w", m="mo1")  # a = c + (mo >> 16); cat1 macc read (see MO1_GAP)
 def andc(c): return C1("and %c,a", c=c, a="rw")
 def absa(): return C1("abs", a="rw")
 def mpyca(c): return C1("mpy %c,a", c=c, a="r", m="w")
@@ -76,6 +76,7 @@ def C2(mn, c=None, d=None, a="", m="", port=None, post=False):
 def sacc(c): return C2("sacc %c", c=c, a="r")
 def sacd(d): return C2("sacd %d", d=d, a="r")
 def smhd(d): return C2("smhd %d", d=d, m="mo")
+def smhc(c): return C2("smhc %c", c=c, m="mo")
 def slml(d): return C2("slml %d", d=d, m="mo")
 def srbd(d): return C2("srbd %d", d=d, port="rb")
 def dis(n, d): return C2("dis %s,%%d" % ("si0_l", "si0_r", "si1_l", "si1_r")[n], d=d)
@@ -117,7 +118,7 @@ def threads(nv=NV):
             andc("M16"), tag(mpyca("K30"), "F"), ref(rdat(n("A1")), "X1"), ref(slml(n("FR")), "F"),
             srbd(n("XA")), lacd(n("XA")), srbd(n("XB")), subd(n("XB")),
             after(lmhd(n("XA")), "sumrd"), macad(n("FR")), smhd(n("SV") + ".w"),             # XA + (XB - XA) frac
-            lacc(n("KD")), mpyca(n("LVL")), addcm(n("KT")), sacc(n("LVL"))])                # LVL = KD LVL + KT
+            lacc(n("KD")), lmhc(n("KT")), macca(n("LVL")), smhc(n("LVL"))])                 # LVL = KT + KD LVL
     for ch, (L, O) in enumerate((("L", "R"), ("R", "L"))):
         T["out" + L] = (["sumrd", "in"], [
             mpydc("SUM" + L, "VIN" + L), macdc("SUM" + O, "VXF" + L),
@@ -137,6 +138,12 @@ def threads(nv=NV):
 # P (delay-RAM port) from a read to its srbd, I (id pointer) while walking. A thread acquiring a resource also takes
 # the lower-order ones its chain needs (order A < P < I < M): holders never wait for a lower resource -> no deadlock.
 ORDER = {"A": 0, "P": 1, "I": 2, "M": 3}
+# cat1 instructions reading macc ('add c,m'): Sony's programs never use them, so their pipeline stage is unproven
+# (MAME reads t - 2 for every macc reader). v0.4.1 updated each voice's level with 'add c,m' and on the HR-MP5 the idle
+# voices sounded (a glitchy copy of the wavetable that followed SINE); the simulator gives exactly that when 'add c,m'
+# sees t - 3. The voices now use lmhc / mac c,a / smhc (all in Sony's GP5 program) and no cat1 macc read is left.
+# If one comes back it sits MO1_GAP words after its chain's last write, macc untouched in between (t - 1 .. t - GAP).
+MO1_GAP = 4
 
 
 def uses(o):
@@ -158,7 +165,7 @@ def mreaders(ops):
             if o.m in ("w", "rw"):
                 lastw = i
                 if o.tag: tags[o.tag] = i
-            if o.m == "mo": rd.setdefault(tags[o.ref] if o.ref else lastw, []).append(i)
+            if o.m in ("mo", "mo1"): rd.setdefault(tags[o.ref] if o.ref else lastw, []).append(i)
         _rcache[key] = (ops, rd)
     return _rcache[key][1]
 
@@ -219,7 +226,7 @@ def schedule(T, prio=None, max_empty=12, blocks=None):
             if o.m in ("w", "rw"):
                 lastw = i
                 if o.tag: tags[o.tag] = i
-            if o.m == "mo":
+            if o.m in ("mo", "mo1"):
                 j = tags[o.ref] if o.ref else lastw
                 assert j is not None, (k, i, o)
                 refidx[(k, i)] = j
@@ -248,6 +255,10 @@ def schedule(T, prio=None, max_empty=12, blocks=None):
             j = refidx[(k, i)]
             p = placed.get((k, j))
             if p is None or w < p + 2 or last_mw(w - 2) != (k, j): return False
+        if o.m == "mo1":                              # cat1 macc read: any pipeline stage t-1 .. t-MO1_GAP sees the chain
+            j = refidx[(k, i)]
+            p = placed.get((k, j))
+            if p is None or w < p + MO1_GAP or last_mw(w - 1) != (k, j): return False
         if o.port in ("rd", "wr") and w < port_free: return False
         if o.port == "rb":
             if not preads[k] or w < preads[k][0] + 4: return False
@@ -542,11 +553,11 @@ def image_bytes(prog, cmem):
     return bytes(p), bytes(c)
 
 
-def selftest(wav=None):
+def selftest(wav=None, lag=2):
     im = build()
-    print("program: %d words (incl. idle), %d cmem words, %d dmem words" %
-          (len(im.lines), len(im.cadr) + len(im.cslot), max(im.dadr.values()) + 1))
-    t = tms57sim.TMS()
+    print("program: %d words (incl. idle), %d cmem words, %d dmem words; cat1 macc reads see t - %d" %
+          (len(im.lines), len(im.cadr) + len(im.cslot), max(im.dadr.values()) + 1, lag))
+    t = tms57sim.TMS(); t.cat1_lag = lag
     t.load(ST0, ST1, im.prog, im.cmem)
     sg = lambda v: v - (1 << 24) if v & 0x800000 else v
     out = []
@@ -661,7 +672,7 @@ def selftest(wav=None):
             for o in out: f.write(struct.pack("<hh", sg(o[0]) >> 8, sg(o[1]) >> 8))
         print("wrote", wav)
     print("ALL OK" if ok else "FAILURES")
-    return ok
+    return ok, out
 
 
 if __name__ == "__main__":
@@ -676,4 +687,7 @@ if __name__ == "__main__":
         for i, l in enumerate(im.lines): print("%3d  %06X  %s" % (i, im.prog[i], l))
     if "--test" in sys.argv:
         w = sys.argv[sys.argv.index("--wav") + 1] if "--wav" in sys.argv else None
-        selftest(w)
+        res = [selftest(w if lag == 2 else None, lag) for lag in (2, 3, 4)]   # the program must not care
+        same = all(r[1] == res[0][1] for r in res)
+        print("outputs bit-identical for cat1 macc reads at t-2 / t-3 / t-4:", "OK" if same else "BAD")
+        print("SELFTEST", "ALL OK" if all(r[0] for r in res) and same else "FAILURES")

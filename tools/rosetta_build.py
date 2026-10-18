@@ -11,7 +11,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 PRESET_LEN = 0xB0
 
 # Everything model-specific. GP5 = HR-GP5 Ver1.03E (EPROM GP5-E1), MP5 = HR-MP5 Ver1.11 (dump rom1_11j).
