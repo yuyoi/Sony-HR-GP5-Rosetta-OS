@@ -46,7 +46,7 @@ def ref(o, t): o.ref = t; return o            # an M read of that named write (d
 def after(o, *thr): o.after = thr; return o   # this op waits until those threads are done
 
 
-DIRECT_C = ("PH", "LVL", "OPH")              # state cells (read and written): direct address
+DIRECT_C = ("PH", "LVL", "OPH", "PA0", "PA1")  # state cells (read and written) + voice read addresses: direct address
 def is_direct(x): return any(x == p or (x.startswith(p) and x[len(p):].isdigit()) for p in DIRECT_C)
 def _c(x): return ("dir", x) if is_direct(x) else ("str", x)   # "str": a c*+ stream slot, placed by the linker
 def _d(x): return x if isinstance(x, tuple) else ("dir", x)
@@ -84,7 +84,8 @@ def dos(n, d): return C2("dos %s,%%d" % ("so0_l", "so0_r", "so1_l", "so1_r")[n],
 def domh(n): return C2("domh %s" % ("so0_l", "so0_r", "so1_l", "so1_r")[n], m="mo")
 def lpc(c): return C2("lpc %c", c=c)
 def rdat(c):
-    """rde c*+ ; smhc c*+ in one word: store int(macc) into a fresh stream slot and start the RAM read from it."""
+    """rde c*+ ; smhc c*+ in one word: store int(macc) into a fresh stream slot and start the RAM read from it.
+    (No longer used: with the real 10-cycle RAM it makes a voice hold the port through its address maths.)"""
     return Op("rde %c ; smhc %c", 12, c=("str", c), m="mo", port="rd")
 def lirk(name): return Op("lirk %i", 3, ptr=name)
 
@@ -114,9 +115,10 @@ def threads(nv=NV):
         n = lambda x: "%s%d" % (x, v)
         T["v%d" % v] = (["age"], [
             lacc(n("PH")), addc(n("DL")), sacc(n("PH")), subd(ptr("AGE.w")), andc(n("XM")),   # a = X
-            tag(mpyca("K15"), "X"), addc("ONE16"), tag(mpyca("K15"), "X1"), ref(rdat(n("A0")), "X"),
-            andc("M16"), tag(mpyca("K30"), "F"), ref(rdat(n("A1")), "X1"), ref(slml(n("FR")), "F"),
-            srbd(n("XA")), lacd(n("XA")), srbd(n("XB")), subd(n("XB")),
+            tag(mpyca("K15"), "X"), addc("ONE16"), tag(mpyca("K15"), "X1"), ref(smhc(n("PA0")), "X"),
+            andc("M16"), tag(mpyca("K30"), "F"), ref(smhc(n("PA1")), "X1"), ref(slml(n("FR")), "F"),
+            rde(n("PA0")), srbd(n("XA")), rde(n("PA1")), srbd(n("XB")),                     # (address stored, then
+            lacd(n("XA")), subd(n("XB")),                                                    #  read: no port hold)
             after(lmhd(n("XA")), "sumrd"), macad(n("FR")), smhd(n("SV") + ".w"),             # XA + (XB - XA) frac
             lacc(n("KD")), lmhc(n("KT")), macca(n("LVL")), smhc(n("LVL"))])                 # LVL = KT + KD LVL
     for ch, (L, O) in enumerate((("L", "R"), ("R", "L"))):
@@ -138,6 +140,9 @@ def threads(nv=NV):
 # P (delay-RAM port) from a read to its srbd, I (id pointer) while walking. A thread acquiring a resource also takes
 # the lower-order ones its chain needs (order A < P < I < M): holders never wait for a lower resource -> no deadlock.
 ORDER = {"A": 0, "P": 1, "I": 2, "M": 3}
+# Delay-RAM access time (tms57sim.XM_CYCLES, measured on the HR-MP5 board: 10; MAME has 4): two accesses at least XMC
+# words apart (closer: the second one is lost), srbd at least XMC words after its rde (earlier: the previous read).
+XMC = tms57sim.XM_CYCLES
 # cat1 instructions reading macc ('add c,m'): Sony's programs never use them, so their pipeline stage is unproven
 # (MAME reads t - 2 for every macc reader). v0.4.1 updated each voice's level with 'add c,m' and on the HR-MP5 the idle
 # voices sounded (a glitchy copy of the wavetable that followed SINE); the simulator gives exactly that when 'add c,m'
@@ -261,8 +266,8 @@ def schedule(T, prio=None, max_empty=12, blocks=None):
             if p is None or w < p + MO1_GAP or last_mw(w - 1) != (k, j): return False
         if o.port in ("rd", "wr") and w < port_free: return False
         if o.port == "rb":
-            if not preads[k] or w < preads[k][0] + 4: return False
-            if len(preads[k]) > 1 and w >= preads[k][1] + 4: return False
+            if not preads[k] or w < preads[k][0] + XMC: return False
+            if len(preads[k]) > 1 and w >= preads[k][1] + XMC: return False
         return True
 
     def op_ok(k, o, word, w):
@@ -270,6 +275,9 @@ def schedule(T, prio=None, max_empty=12, blocks=None):
         if T[k][0] and not all(done(x) for x in T[k][0]): return False
         if o.after and not all(done(x) for x in o.after): return False
         cats = [x.cat for _, x in word]
+        # hardware (HR-MP5, measured): domh in a word whose cat1 reads dmem puts that dmem value on the output
+        if o.txt.startswith("domh") and any(x.cat == 1 and x.d for _, x in word): return False
+        if o.cat == 1 and o.d and any(x.txt.startswith("domh") for _, x in word): return False
         if o.cat in (3, 12) and word: return False
         if 3 in cats or 12 in cats: return False
         if o.cat in (1, 2) and o.cat in cats: return False
@@ -329,7 +337,7 @@ def schedule(T, prio=None, max_empty=12, blocks=None):
                         for r in uses(ops[k2][i2]):          # reserve what the forced read needs
                             for x, e in need_for(ops[k2], i2, r).items():
                                 if owner[x] is None: owner[x] = k2; end[k2][x] = e
-        if o.port in ("rd", "wr"): port_free = w + 4
+        if o.port in ("rd", "wr"): port_free = w + XMC
         if o.port == "rd": preads[k].append(w)
         if o.port == "rb": preads[k].pop(0)
         if o.cat == 3: id_val = o.ptr
@@ -349,7 +357,7 @@ def schedule(T, prio=None, max_empty=12, blocks=None):
             if not done(k) and ops[k][pos[k]].port == "rb" and len(preads[k]) > 1:
                 o = ops[k][pos[k]]
                 if op_ok(k, o, word, w): word.append((k, o)); commit(k, o, w)
-                elif w >= preads[k][1] + 3: raise Stuck("srbd window missed %s at %d" % (k, w))
+                elif w >= preads[k][1] + XMC - 1: raise Stuck("srbd window missed %s at %d" % (k, w))
         progress = True
         while progress and not (word and word[0][1].cat in (3, 12)):
             progress = False
@@ -443,7 +451,7 @@ def link(words, nv=NV):
     lines.append("idle")
     assert len(lines) <= 256, "program too long: %d words" % len(lines)
     last_port = max(i for i, word in enumerate(words) if any(o.port in ("rd", "wr") for k, o in word))
-    assert last_port <= len(lines) - 6, "delay-RAM access too close to the end (%d of %d)" % (last_port, len(lines))
+    assert last_port <= len(lines) - XMC - 2, "delay-RAM access too close to the end (%d of %d)" % (last_port, len(lines))
     return lines, cadr, cslot, dadr
 
 
@@ -456,7 +464,7 @@ def init_values(nv=NV, platform="mp5"):
              RG0=0, RG2=0, RGS=q31(0.5), RGW=0, RGP=0, MREC=0x80000000)
     for vv in range(nv):
         v.update({"DL%d" % vv: 0x10000, "PH%d" % vv: 0, "XM%d" % vv: XM_SYNTH, "KD%d" % vv: q31(0.999),
-                  "KT%d" % vv: 0, "LVL%d" % vv: 0, "A0%d" % vv: 0, "A1%d" % vv: 0})
+                  "KT%d" % vv: 0, "LVL%d" % vv: 0, "PA0%d" % vv: 0, "PA1%d" % vv: 0})
     th0, th1 = (0.5, 1.0) if platform == "mp5" else (0.32, 0.0)
     for L in "LR":
         v.update({"VIN" + L: q31(1.0), "VXF" + L: q31(0.5), "FM1" + L: 0x80000000, "FMQ" + L: q31(-1.0),
@@ -474,7 +482,7 @@ def cmem_init(cadr, cslot, nv=NV, platform="mp5"):
 
 
 class Image:
-    def __init__(s, nv=NV, platform="mp5", trials=600):
+    def __init__(s, nv=NV, platform="mp5", trials=1500):
         T = threads(nv)
         s.words = best_schedule(T, trials, nv=nv)
         s.lines, s.cadr, s.cslot, s.dadr = link(s.words, nv)
@@ -533,6 +541,8 @@ def gen_asm(im, platform="mp5"):
     t32("kt_cut", [q31(2 * math.sin(math.pi * min(30 * (7000 / 30.0) ** (v / 98.0), 7000) / FS)) for v in range(100)])
     t32("kt_res", [q31(min(0.99999, (0.08 / 1.0) ** (v / 99.0))) for v in range(100)])
     t32("kt_note", [int(round(65536 * 2 ** ((i - 64) / 12.0))) for i in range(128)])
+    # SYNTH, by MIDI note: concert pitch on the hardware (the DSP runs at 48 kHz: measured, the wavetable plays 750 Hz)
+    t32("kt_nsyn", [int(round(65536 * synth_ratio(n))) for n in range(128)])
     out.append("keys_prog:")
     for i in range(0, len(p), 16): out.append("        .db     " + ", ".join("0x%02X" % b for b in p[i:i + 16]))
     out.append("keys_cmem:")
@@ -542,6 +552,8 @@ def gen_asm(im, platform="mp5"):
 
 # ---------------- host helpers (what the H8 sends), used by the tests ----------------
 def note_delta(semis): return int(round(65536 * 2 ** (semis / 12.0)))
+FS_HW = 48000.0                                      # the HR-MP5's DSP sample rate (measured: fs / 64 = 750 Hz)
+def synth_ratio(n): return 440.0 / (FS_HW / 64) * 2 ** ((n - 69) / 12.0)   # SYNTH DL for MIDI note n (A4 = 440 Hz)
 
 
 def image_bytes(prog, cmem):

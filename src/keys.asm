@@ -369,12 +369,20 @@ kpanel: MOV.W   R6,R0
         MOV.B   R1,@(K_VN-K_VK,R0)
         RTS
 
-; kdl: R6 = voice -> R4:R5 = DL for its note - ROOT (clamped to the table)
+; kdl: R6 = voice -> R4:R5 = DL for its note: SYNTH = concert pitch (kt_nsyn, the DSP's 48 kHz / 64 = 750 Hz
+; wavetable), SAMPLE = note - ROOT (ROOT = the recording's own note), both clamped to the tables
 kdl:    MOV.W   R6,R0
         ADD.W   #K_VN,R0
         CLR.W   R1
         MOV.B   @R0,R1
-        CLR.W   R3
+        TST.B   @K_MODE
+        BNE     kdl3
+        CMP.W   #127,R1
+        BLE     kdl4
+        MOV.W   #127,R1
+kdl4:   MOV.W   #kt_nsyn,R2
+        JMP     @lk32
+kdl3:   CLR.W   R3
         MOV.B   @K_ROOT,R3
         SUB.W   R3,R1
         ADD.W   #64,R1

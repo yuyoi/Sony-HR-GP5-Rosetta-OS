@@ -189,8 +189,29 @@ the MAME semantics incl. delay RAM and coefficient updates), checked on Sony's c
 generator + rendered WAV tests; (3) H8 side: program upload, gate Sony's TMS writes, a Rosetta KEYS page that plays test
 notes from the panel, first hardware burn; (4) MIDI note-on hook; (5) oscillators, filter, envelopes, LFO, ARP.
 
-## DDS-DSP SAMPLER (Rosetta 0.4.2, HR-MP5 build, 8 voices + MIDI IN, emulator-tested 2026-10-18)
-> **Hardware: 0.4.1 played but had a background noise (fixed in 0.4.2, see below, not on hardware yet).**
+## DDS-DSP SAMPLER (Rosetta 0.4.4, HR-MP5 build, 8 voices + MIDI IN + MIDI remote)
+> **Hardware:** the 0.4.4 DSP program was verified on the unit over the MIDI link (silent at rest, 8 voices at
+> their pitches on both outputs, no leak) before the ROM was rebuilt. See "Measured on the hardware" below.
+
+### Measured on the hardware (2026-10-18, audio loop: unit outs -> Scarlett 6i6 rear ins 3/4 via ASIO, MIDI link)
+Probe programs uploaded with `tools/keyslink.py` (SysEx 10/11), recorded and analysed on the PC. What the real
+TMS57002 on this board does, where it differs from MAME:
+- **Sample rate 48 kHz** (the 64-sample wavetable plays 750 Hz = fs / 64). SYNTH notes use `kt_nsyn` (A4 = 440 Hz).
+- **Outputs:** so0_l -> left jack, so0_r -> right jack; so1 does not reach the jacks (IC502). `dos` and `domh` give the
+  same output.
+- **Delay RAM: an access takes 10 instruction cycles** (MAME: 4). srbd at rde + 8 still returns the previous read,
+  from + 10 the new one; two accesses (any of read / write) closer than 10 words: the second one is lost.
+  `tms57sim.XM_CYCLES = 10`, the scheduler's `XMC`. The 0.4.1-0.4.3 program spaced its 18 accesses 4-6 words apart:
+  every voice read returned stale data (the oscillator, at 750 Hz whatever the pitch).
+- **`domh` in a word whose cat1 reads dmem outputs that dmem value** (probe: `lacd d(02) ; domh so0_r` = the d cell
+  on the jack, `and c(13),a ; domh` = clean). This was the "oscillation": `lmhd d(18) ; domh so0_l` (0.4.3) and
+  `sub d(2e),a ; domh so0_r` put a voice's raw RAM sample on the output, ignoring VOLUME / THRU / CUTOFF. Scheduler
+  rule: no cat1 dmem operand in a domh word.
+- Same as MAME: `sacc` / `sacd` in a word with a cat1 A writer store the A from before it; the t - 2 macc read stage
+  (Sony relies on it); host coefficient writes (CLOAD) apply live.
+- Voices now store their read address (`smhc PA0`) and read it later (`rde c(PA0)`), so a voice doesn't hold the RAM
+  port through its address maths: 254 words with the 10-cycle rule (fused `rde c*+ ; smhc c*+`: 331).
+
 
 Files: `tools/tms57sim.py` (simulator + assembler), `tools/keysdsp.py` (program generator, scheduler, linker, self-test,
 H8 tables), `src/keys.asm` (page, H8 driver, gates). A first 4-voice version (per-voice oscillator layers and pans,

@@ -11,7 +11,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.4.3"
+VERSION = "0.4.4"
 PRESET_LEN = 0xB0
 
 # Everything model-specific. GP5 = HR-GP5 Ver1.03E (EPROM GP5-E1), MP5 = HR-MP5 Ver1.11 (dump rom1_11j).
@@ -326,7 +326,8 @@ def emu_keys_test(img, model, sy):
     z = [i for i in range(1, len(y)) if y[i - 1] < 0 <= y[i]]
     f = (len(z) - 1) / ((z[-1] - z[0]) / 44100.0) if len(z) > 2 else 0
     rms = math.sqrt(sum(v * v for v in y) / len(y)) / 0x800000
-    assert abs(f - 44100 / 64) < 2 and rms > 0.05, (f, rms)
+    f_want = 44100 / 64 * keysdsp.synth_ratio(77)                    # NOTE 77 (F5) in SYNTH (sim units: fs 44.1 k)
+    assert abs(f - f_want) < 2 and rms > 0.05, (f, f_want, rms)
     # CHORD -> 8 STACK while playing: all 8 voices, every pitch in the output
     n0 = len(tms2.updates)
     e.press("C"); e.dial(7, 150000); e.press("EXIT")                 # row C = CHORD, edit, last entry
@@ -341,7 +342,7 @@ def emu_keys_test(img, model, sy):
     def tone(fr): return 2 * math.hypot(sum(v * math.cos(2 * math.pi * fr * i / 44100) for i, v in enumerate(y)),
                                         sum(v * math.sin(2 * math.pi * fr * i / 44100) for i, v in enumerate(y))) / len(y) / 0x800000
     stack = [0, 7, 12, 16, 19, 24, 28, 31]
-    amps = [tone(44100 / 64 * 2 ** (s_ / 12.0)) for s_ in stack]
+    amps = [tone(44100 / 64 * keysdsp.synth_ratio(77 + s_)) for s_ in stack]
     assert all(a_ > 0.01 for a_ in amps), ["%.3f" % a_ for a_ in amps]
     # leave the page: K_OWN off, Sony reloads its program
     mark = len(e.dsplog)
@@ -362,7 +363,7 @@ def emu_midi_test(img, model, sy):
     and sound at their pitch (replayed into tools/tms57sim.py); note off / velocity 0 / the sustain pedal / all notes
     off let them go; a 9th key steals the oldest voice; Sony gets no MIDI while the page is open; page closed = no
     events, Sony's MIDI as before."""
-    import dsplog, tms57sim, math
+    import dsplog, tms57sim, math, keysdsp
     VK, VST, MQW, SRING = 0x7068, 0x70A4, 0x7096, 0x5A00
     e = new_emu(img, model); e.run(1_500_000)
     def send(bs, steps=250000):
@@ -395,7 +396,7 @@ def emu_midi_test(img, model, sy):
         y = [t.sample()[0] for _ in range(n)]
         return [v - (1 << 24) if v & 0x800000 else v for v in y]
     def tone(y, note):
-        fr = 44100 / 64 * 2 ** ((note - 77) / 12.0)
+        fr = 44100 / 64 * keysdsp.synth_ratio(note)
         return 2 * math.hypot(sum(v * math.cos(2 * math.pi * fr * i / 44100) for i, v in enumerate(y)),
                               sum(v * math.sin(2 * math.pi * fr * i / 44100) for i, v in enumerate(y))) / len(y) / 0x800000
     def keys(): return {e.ram[VK + v]: e.ram[VST + v] for v in range(8) if e.ram[VK + v] != 0xFF}

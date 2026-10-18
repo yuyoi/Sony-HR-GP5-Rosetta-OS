@@ -18,6 +18,7 @@ ST1_SFMA_SH, ST1_SFMO_SH, ST1_RND_SH, ST1_CRM_SH = 7, 11, 15, 18
 ST1_DBP = 0x100000
 POST = {0x0c, 0x1c, 0x1d, 0x1e, 0x1f, 0x3a, 0x3c, 0x3d, 0x40, 0x41, 0x44, 0x45} | set(range(0x48, 0x4c)) | \
        {0x50, 0x51, 0x54, 0x55} | set(range(0x58, 0x5c)) | set(range(0x60, 0x64)) | set(range(0x68, 0x70))
+XM_CYCLES = 10                       # external-memory access time in instruction cycles: HR-MP5 board (MAME: 4)
 ROUNDING = [0, 1 << 15, 1 << 23, 1 << 17, 1 << 31]
 A64 = (1 << 64) - 1
 RMASK = [A64, A64 - (1 << 16) + 1, A64 - (1 << 24) + 1, A64 - (1 << 18) + 1, A64 - (1 << 32) + 1]
@@ -37,6 +38,7 @@ class TMS:
         s.pc = s.ca = s.id = s.ba0 = s.ba1 = 0
         s.xba = s.xoa = s.xwr = s.xrd = s.txrd = s.xm_adr = 0
         s.reading = s.writing = False
+        s.xm_cycles = XM_CYCLES; s.xm_n = 0; s.xm_fin = False
         s.xm = bytearray(mem_nibbles)
         s.si = [0] * 4; s.so = [0] * 4
         s.upd = []; s.sa = 0; s.updating = False
@@ -128,24 +130,31 @@ class TMS:
         adr <<= 2 if s.st0 & ST0_WORD else 1
         if not s.st0 & ST0_SEL: adr <<= 1
         s.xm_adr = adr & mask
+        s.xm_n = 0; s.xm_fin = False
 
     def xm_step(s):
-        adr = s.xm_adr; word = s.st0 & ST0_WORD; sel = s.st0 & ST0_SEL
-        if word: off = (16 - ((adr & 3) << 3)) if sel else (20 - ((adr & 7) << 2))
-        else: off = (16 - ((adr & 1) << 3)) if sel else (20 - ((adr & 3) << 2))
-        done = off == 0 if word else off == 8
-        if s.reading:
-            v = s.xm[adr]
-            if sel: s.txrd = (s.txrd & ~(0xff << off)) | (v << off)
-            else: s.txrd = (s.txrd & ~(0xf << off)) | ((v & 0xf) << off)
-            if done:
-                if not word: s.txrd &= 0xffff00
-                s.xrd = s.txrd & M24; s.reading = False; s.xm_adr = 0
+        """One instruction cycle of the external-memory access in flight. The nibble transfers run as in MAME, but the
+        port stays busy (a new rde / wre is dropped) and the read data reaches srbd only after xm_cycles cycles:
+        measured on the HR-MP5 board (M_256K, nibble bus) = 10, where MAME has 4 (srbd at rde + 8 still sees the
+        previous read, + 10 the new one; any two accesses closer than 10 words: the second one is lost)."""
+        s.xm_n += 1
+        if not s.xm_fin:
+            adr = s.xm_adr; word = s.st0 & ST0_WORD; sel = s.st0 & ST0_SEL
+            if word: off = (16 - ((adr & 3) << 3)) if sel else (20 - ((adr & 7) << 2))
+            else: off = (16 - ((adr & 1) << 3)) if sel else (20 - ((adr & 3) << 2))
+            done = off == 0 if word else off == 8
+            if s.reading:
+                v = s.xm[adr]
+                if sel: s.txrd = (s.txrd & ~(0xff << off)) | (v << off)
+                else: s.txrd = (s.txrd & ~(0xf << off)) | ((v & 0xf) << off)
+                if done and not word: s.txrd &= 0xffff00
+            else:
+                s.xm[adr] = ((s.xwr >> off) & (0xff if sel else 0xf))
+            if done: s.xm_fin = True
             else: s.xm_adr = adr + 1
-        else:
-            s.xm[adr] = ((s.xwr >> off) & (0xff if sel else 0xf))
-            if done: s.writing = False; s.xm_adr = 0
-            else: s.xm_adr = adr + 1
+        if s.xm_fin and s.xm_n >= s.xm_cycles:
+            if s.reading: s.xrd = s.txrd & M24
+            s.reading = s.writing = False; s.xm_adr = 0
 
     # ---- one sample ----
     def sample(s, si=(0, 0, 0, 0)):
