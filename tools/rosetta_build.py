@@ -11,7 +11,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.4.2"
+VERSION = "0.4.3"
 PRESET_LEN = 0xB0
 
 # Everything model-specific. GP5 = HR-GP5 Ver1.03E (EPROM GP5-E1), MP5 = HR-MP5 Ver1.11 (dump rom1_11j).
@@ -138,7 +138,7 @@ def build(out, model="gp5"):
         src += "\n" + open(os.path.join(ROOT, "src", "keys.asm"), encoding="utf-8").read()
         src += "\n" + keysdsp.gen_asm(keysdsp.build(platform=model), model)
     else:
-        src += "\nkeys_apply:\nkeys_tick:\n        RTS\n"
+        src += "\nkeys_apply:\nkeys_boot:\n        RTS\nkeys_tick:\n        CLR.W   R0\n        RTS\n"
     src += "\n" + gen_tables(rom, pf)
     big_col = (38 - big_width(rom, "ROSETTA")) // 2 if model == "gp5" else 0
     a = Asm({"ROSETTA_BASE": pf["rosetta_base"], "BIG_COL": big_col})
@@ -370,8 +370,8 @@ def emu_midi_test(img, model, sy):
         e.run(len(bs) * 600 + steps)
     def ring(): return e.ram[SRING] << 8 | e.ram[SRING + 1]
     q0, r0 = e.ram[MQW], ring()
-    send([0x90, 60, 100])                                            # page closed: Sony only
-    assert e.ram[MQW] == q0 and ring() != r0, "page closed: queued %d, Sony ring %d -> %d" % (e.ram[MQW], r0, ring())
+    send([0x90, 60, 100])                                            # page closed: Sony gets it, no voice later
+    assert ring() != r0, "page closed: Sony ring %d -> %d" % (r0, ring())
     e.dsplog = []
     mark = []
     def tr(em, pc):
@@ -379,6 +379,8 @@ def emu_midi_test(img, model, sy):
     e.trace = tr
     for k in ("SYSTEM", "B", "A"): e.press(k)
     assert e.ram[0x70A0] == 1 and mark, "page / program not loaded"
+    e.run(300000)
+    assert all(e.ram[VST + v] == 0 for v in range(8)), "a note from before the page opened plays"
     e.trace = None
     tms, _ = dsplog.decode(e.dsplog[:mark[0]])
     t = tms57sim.TMS(); t.load(tms.st0, tms.st1, tms.prog, [tms.cmem.get(i, 0) for i in range(256)])
@@ -426,6 +428,50 @@ def emu_midi_test(img, model, sy):
     return dict(chord=" ".join("%.3f" % a for a in amps), off_pitch=round(off, 4), steal8=" ".join("%.3f" % a for a in amps2))
 
 
+def emu_link_test(img, model, sy):
+    """The MIDI link (tools/keyslink.py) from the ROSETTA home screen: CC 119 opens the page, a CC sets VOLUME, SysEx
+    uploads a marked program + coefficient image and loads it (byte-exact at the TMS57002), pokes one coefficient,
+    goes back to the ROM image, CC 119 leaves the page."""
+    import dsplog, keysdsp, keyslink
+    im = keysdsp.build(platform=model)
+    e = new_emu(img, model); e.run(1_500_000)
+    def page(): return e.ram[0x7010] << 8 | e.ram[0x7011]
+    assert page() == sy["pg_root"], "not on the home screen"
+    e.dsplog = []
+    def send(bs, steps=400000):
+        e.midi_in += list(bs); e.run(len(bs) * 600 + steps)
+    send(keyslink.cc_page(True), 1_500_000)
+    assert page() == sy["pg_keys"] and e.ram[0x70A0] == 1, "CC 119 did not open the page (page %04X own %d)" % (page(), e.ram[0x70A0])
+    d0, _ = dsplog.decode(e.dsplog)
+    assert d0.loads >= 1 and d0.prog[:len(im.prog)] == im.prog, "page open: our program not loaded"
+    n0 = len(d0.updates)
+    send(keyslink.cc_set("VOLUME", 40))
+    assert e.ram[0x7080 + 16] == 40, "CC VOLUME -> K_SET %d" % e.ram[0x7080 + 16]
+    d1, _ = dsplog.decode(e.dsplog)
+    vin = set(im.addrs("VINL") + im.addrs("VINR"))
+    assert any(a in vin for a, v in d1.updates[n0:]), "VOLUME not sent to VIN"
+    # a marked image: our program with its last cmem word changed
+    cm = list(im.cmem); cm[255] = 0x13572468
+    mark = len(e.dsplog)
+    for m in keyslink.sx_upload(im.prog, cm): send(m, 20000)
+    send(keyslink.sx_load(), 1_500_000)
+    d2, _ = dsplog.decode(e.dsplog[mark:])
+    assert d2.loads == 1, "link load: %d program loads" % d2.loads
+    assert d2.prog[:len(im.prog)] == im.prog and d2.cmem.get(255) == 0x13572468 and \
+        all(d2.cmem.get(i, 0) == cm[i] for i in range(256)), "link image differs at the TMS57002"
+    mark = len(e.dsplog)
+    send(keyslink.sx_coef(0x85, 0xDEADBEEF))
+    d3, _ = dsplog.decode(e.dsplog[mark:])
+    assert (0x85, 0xDEADBEEF) in d3.updates, "poke: %s" % d3.updates[:4]
+    mark = len(e.dsplog)
+    send(keyslink.sx_rom(), 1_500_000)
+    d4, _ = dsplog.decode(e.dsplog[mark:])
+    assert d4.loads == 1 and all(d4.cmem.get(i, 0) == im.cmem[i] for i in range(256)), "ROM image not back"
+    send(keyslink.cc_page(False), 1_500_000)
+    assert page() == sy["pg_root"] and e.ram[0x70A0] == 0, "CC 119 0 did not leave the page"
+    return dict(upload_msgs=len(keyslink.sx_upload(im.prog, cm)), poke="ok", rom_back="ok")
+
+
 if __name__ == "__main__":
     model = sys.argv[1] if len(sys.argv) > 1 else "gp5"
     out = os.path.join(ROOT, "build", PLATFORMS[model]["out"])
@@ -440,4 +486,5 @@ if __name__ == "__main__":
     if "keys" in PLATFORMS[model]:
         print("DDS-DSP SAMPLER:", emu_keys_test(bytes(img), model, sy))
         print("MIDI IN:", emu_midi_test(bytes(img), model, sy))
+        print("MIDI link:", emu_link_test(bytes(img), model, sy))
     print("x4 md5", hashlib.md5(open(out[:-4] + "_SST39SF040_x4.bin", "rb").read()).hexdigest())

@@ -53,7 +53,17 @@
         .equ K_MJ, RV+0xDE
         .equ K_MN, RV+0xDF
         .equ K_MQ, RV+0xE0               ; 16 events x (key, value): 0-127 note (value = velocity, 0 = off),
-                                         ; 0x80 sustain pedal (value = CC 64), 0x81 all notes off
+                                         ; 0x80 sustain pedal (value = CC 64), 0x81 all notes off, 0xA0 + n setting n
+        .equ K_GO, RV+0x9A               ; CC 119 -> keys_tick: 1 = open this page, 2 = leave it
+        .equ K_REDRAW, RV+0x9B           ; keys_tick -> k_idle: go through redraw_loop (page change, CC settings)
+        .equ K_SX, RV+0x9C               ; SysEx (midi_rx): 0 none, 1 manufacturer next, 4 'R' next, 2 ours, 3 not ours
+        .equ K_SXN, RV+0x9D              ;   bytes of ours so far
+        .equ K_SXCMD, RV+0x9E            ;   a command for keys_tick (0 = none)
+        .equ K_LSRC, RV+0x9F             ; keys_load: 0 = the ROM image, 1 = K_BUF (the link's)
+        .equ K_SXB, 0x7100               ; SysEx staging, 12 bytes: command, arguments (0x47100-: unused by Sony)
+        .equ K_SXOFF, 0x710C             ; word: next K_BUF offset (command 10)
+        .equ K_SXHI, 0x710E              ; high nibble waiting (0xFF = none)
+        .equ K_BUF, 0x7110               ; program + coefficient image from the link (KEYS_PROG_LEN + KEYS_CMEM_LEN)
         .equ DSPCOPY, 0x1330             ; Sony's DSP-side copy of the program (page 4)
         .equ REC_TICKS, 300              ; 65536 samples = 1.49 s at 44.1 kHz
         .equ LVLMAX, 0x4000              ; a voice's full level (0.5: 4 voices per side without clipping)
@@ -95,6 +105,8 @@ kap0:   MOV.W   @E_PAGE,R0
         JMP     @keys_unload
 kap1:   TST.B   @K_OWN
         BNE     kap2
+        CLR.B   @K_LSRC
+        CLR.B   @K_SXCMD
         JSR     @keys_load
 kap2:   CLR.W   R6
 kap3:   MOV.W   R6,R0
@@ -490,29 +502,50 @@ krl2:   ADD.W   #1,R6
 ; ---- MIDI IN: every channel, whatever Sony's channel / OMNI setting ----
 ; midi_rx: Sony's MIDI IN interrupt (0x1F16) calls here for every byte, in place of its MOV.B @FFDD,R1, and gets R1 back:
 ; the byte (page closed), or 0xF9 while the page is open (an undefined realtime byte Sony skips: no program changes or
-; controllers reach Sony meanwhile). R0 is free, DP = 0 in, interrupts masked. Note on / off, the sustain pedal and all
-; notes off go into the K_MQ queue; keys_midi plays them from the main loop.
+; controllers reach Sony meanwhile). R0 is free, DP = 0 in, interrupts masked. Every byte is parsed, page open or not:
+; note on / off, the sustain pedal, all notes off and CC 20-38 (the page's settings) go into the K_MQ queue (keys_midi
+; plays it while the page is open), CC 119 opens (>= 64) / leaves the page (K_GO), SysEx F0 7D 52 .. F7 is the link
+; (tools/keyslink.py): 10 = data into K_BUF, 11 = load K_BUF into the TMS57002, 12 = one coefficient, 13 = back to
+; the ROM image, 14 = one setting.
 midi_rx:
         MOV.B   @0xFFDD,R1
         LDC.B   #4,DP
+        JSR     @mrx_byte
         TST.B   @K_OWN
-        BNE     mrx0
-        RTS
-mrx0:   JSR     @mrx_byte
+        BEQ     mrx_r
         MOV.B   #0xF9,R1
-        RTS
+mrx_r:  RTS
 mrx_byte:
         BTST.B  #7,R1
         BEQ     mrx2
-        CMP.B   #0xF8,R1                 ; realtime (clock ...): running status stays
+        CMP.B   #0xF8,R1                 ; realtime (clock ...): running status and SysEx stay
         BCC     mrx9
-        MOV.B   R1,@K_MST
+        CMP.B   #0xF7,R1
+        BNE     mrx0
+        CMP.B   #2,@K_SX                 ; F7 ending our SysEx: its command goes to keys_tick
+        BNE     mrx01
+        TST.B   @K_SXCMD
+        BNE     mrx01                    ; (one at a time: dropped while one is pending)
+        MOV.B   @K_SXB,R0
+        CMP.B   #0x10,R0
+        BEQ     mrx01                    ; data: nothing to run
+        MOV.B   R0,@K_SXCMD
+mrx01:  CLR.B   @K_SX
+        BRA     mrx02
+mrx0:   CLR.B   @K_SX                    ; any other status byte ends a SysEx
+        CMP.B   #0xF0,R1
+        BNE     mrx02
+        MOV.B   #1,@K_SX                 ; F0: the manufacturer byte next
+mrx02:  MOV.B   R1,@K_MST
         CMP.B   #0xF0,R1
         BCS     mrx1
         CLR.B   @K_MST                   ; SysEx / system common: no running status
 mrx1:   MOV.B   #0xFF,@K_MD1
 mrx9:   RTS
-mrx2:   MOV.B   @K_MST,R0                ; a data byte: 8n / 9n / Bn take two
+mrx2:   TST.B   @K_SX                    ; a data byte: inside a SysEx?
+        BEQ     mrx20
+        JMP     @mrx_sx
+mrx20:  MOV.B   @K_MST,R0                ; 8n / 9n / Bn take two
         AND.B   #0xF0,R0
         CMP.B   #0xB0,R0
         BEQ     mrx3
@@ -536,15 +569,28 @@ mrx4:   MOV.W   R2,@-SP
         BNE     mrx5
         CLR.B   R3                       ; note off = velocity 0
         BRA     mrx7
-mrx5:   CMP.B   #64,R2                   ; controllers: sustain pedal, all notes off (120 / 123), nothing else
+mrx5:   CMP.B   #64,R2                   ; controllers: sustain pedal, all notes off (120 / 123), settings, the page
         BNE     mrx6
         MOV.B   #0x80,R2
         BRA     mrx7
 mrx6:   CMP.B   #120,R2
         BEQ     mrx61
         CMP.B   #123,R2
-        BNE     mrx8
+        BNE     mrx62
 mrx61:  MOV.B   #0x81,R2
+        BRA     mrx7
+mrx62:  CMP.B   #119,R2                  ; CC 119: open (>= 64) / leave the page, from keys_tick
+        BNE     mrx63
+        MOV.B   #2,R0
+        CMP.B   #64,R3
+        BCS     mrx64
+        MOV.B   #1,R0
+mrx64:  MOV.B   R0,@K_GO
+        BRA     mrx8
+mrx63:  SUB.B   #20,R2                   ; CC 20 .. 20 + KS_N - 1: setting R2 - 20 -> event 0xA0 + n
+        CMP.B   #KS_N,R2
+        BCC     mrx8
+        ADD.B   #0xA0,R2
 mrx7:   CLR.W   R0
         MOV.B   @K_MQW,R0
         SHLL.W  R0
@@ -559,6 +605,86 @@ mrx7:   CLR.W   R0
 mrx8:   MOV.W   @SP+,R3
         MOV.W   @SP+,R2
         RTS
+
+; mrx_sx: a SysEx data byte (R1). K_SX: 1 manufacturer next, 4 'R' (0x52) next, 2 ours, 3 not ours.
+; Ours: byte 0 = command, then 10: offset (2 x 7 bits) + nibble pairs (high first) into K_BUF; others: K_SXB[1..11].
+mrx_sx: MOV.B   @K_SX,R0
+        CMP.B   #1,R0
+        BNE     msx1
+        MOV.B   #3,@K_SX
+        CMP.B   #0x7D,R1                 ; non-commercial ID
+        BNE     msx9
+        MOV.B   #4,@K_SX
+        RTS
+msx1:   CMP.B   #4,R0
+        BNE     msx2
+        MOV.B   #3,@K_SX
+        CMP.B   #0x52,R1
+        BNE     msx9
+        MOV.B   #2,@K_SX
+        CLR.B   @K_SXN
+        RTS
+msx2:   CMP.B   #2,R0
+        BNE     msx9
+        MOV.W   R2,@-SP
+        MOV.W   R3,@-SP
+        CLR.W   R2
+        MOV.B   @K_SXN,R2
+        BNE     msx3
+        MOV.B   R1,@K_SXB                ; the command
+        MOV.B   #0xFF,@K_SXHI
+        BRA     msx7
+msx3:   CMP.B   #0x10,@K_SXB
+        BNE     msx5
+        CMP.W   #3,R2
+        BCS     msx5
+        MOV.B   @K_SXHI,R0               ; data: a nibble pair is one byte
+        CMP.B   #0xFF,R0
+        BNE     msx4
+        MOV.B   R1,@K_SXHI
+        BRA     msx8
+msx4:   SHLL.B  R0
+        SHLL.B  R0
+        SHLL.B  R0
+        SHLL.B  R0
+        AND.B   #0x0F,R1
+        OR.B    R1,R0
+        MOV.B   #0xFF,@K_SXHI
+        MOV.W   @K_SXOFF,R2
+        CMP.W   #KEYS_PROG_LEN+KEYS_CMEM_LEN,R2
+        BCC     msx8
+        MOV.B   R0,@(K_BUF,R2)
+        ADD.W   #1,R2
+        MOV.W   R2,@K_SXOFF
+        BRA     msx8
+msx5:   CMP.W   #12,R2                   ; staging
+        BCC     msx7
+        MOV.B   R1,@(K_SXB,R2)
+        CMP.W   #2,R2
+        BNE     msx7
+        CMP.B   #0x10,@K_SXB             ; 10: the offset is in -> K_SXOFF = hi * 128 + lo
+        BNE     msx7
+        CLR.W   R3
+        MOV.B   @K_SXB+1,R3
+        SHLL.W  R3
+        SHLL.W  R3
+        SHLL.W  R3
+        SHLL.W  R3
+        SHLL.W  R3
+        SHLL.W  R3
+        SHLL.W  R3
+        CLR.W   R2
+        MOV.B   R1,R2
+        ADD.W   R2,R3
+        MOV.W   R3,@K_SXOFF
+msx7:   MOV.B   @K_SXN,R0                ; count (stops at 255)
+        CMP.B   #0xFF,R0
+        BEQ     msx8
+        ADD.B   #1,R0
+        MOV.B   R0,@K_SXN
+msx8:   MOV.W   @SP+,R3
+        MOV.W   @SP+,R2
+msx9:   RTS
 
 ; keys_midi (from keys_tick): play the queued events
 keys_midi:
@@ -575,6 +701,8 @@ kmi1:   MOV.B   @K_MQR,R0
         ADD.B   #1,R0
         AND.B   #15,R0
         MOV.B   R0,@K_MQR
+        CMP.B   #0xA0,R1
+        BCC     kmi5
         CMP.B   #0x80,R1
         BEQ     kmi3
         BCC     kmi4
@@ -588,6 +716,133 @@ kmi3:   JSR     @kmidi_ped
         BRA     kmi1
 kmi4:   JSR     @kmidi_all
         BRA     kmi1
+kmi5:   SUB.B   #0xA0,R1                 ; CC 20 + n: setting n = value (clamped); redraw_loop sends it
+        JSR     @kset
+        BRA     kmi1
+
+; kset: R1 = setting (< KS_N), R3 = value -> K_SET (clamped to kcc_max), K_REDRAW
+kset:   CLR.W   R2
+        MOV.B   R1,R2
+        LDC.B   #0,DP
+        MOV.B   @(kcc_max,R2),R0
+        LDC.B   #4,DP
+        CMP.B   R0,R3
+        BLS     kst1
+        MOV.B   R0,R3
+kst1:   MOV.B   R3,@(K_SET,R2)
+        MOV.B   #1,@K_REDRAW
+        RTS
+
+; ---- CC 119 (K_GO): open / leave this page like a SUB row / EXIT would ----
+keys_go:                                 ; R0 = 1 open, 2 leave
+        MOV.W   @E_PAGE,R2
+        CMP.B   #1,R0
+        BNE     kgo5
+        CMP.W   #pg_keys,R2
+        BEQ     kgo9
+        CLR.W   R1
+        MOV.B   @E_DEPTH,R1
+        CMP.B   #4,R1
+        BCC     kgo9
+        MOV.W   R1,R3                    ; E_STACK + depth * 4 <- page, sel, top
+        SHLL.W  R3
+        SHLL.W  R3
+        ADD.W   #E_STACK,R3
+        MOV.W   R2,@R3
+        MOV.B   @E_SEL,R0
+        MOV.B   R0,@(2,R3)
+        MOV.B   @E_TOP,R0
+        MOV.B   R0,@(3,R3)
+        ADD.B   #1,R1
+        MOV.B   R1,@E_DEPTH
+        MOV.W   #pg_keys,R0
+        MOV.W   R0,@E_PAGE
+        CLR.B   @E_SEL
+        CLR.B   @E_TOP
+        CLR.B   @E_EDIT
+        MOV.B   #1,@K_REDRAW
+        RTS
+kgo5:   CMP.W   #pg_keys,R2
+        BNE     kgo9
+        CLR.W   R1
+        MOV.B   @E_DEPTH,R1
+        BEQ     kgo9
+        SUB.B   #1,R1
+        MOV.B   R1,@E_DEPTH
+        MOV.W   R1,R3
+        SHLL.W  R3
+        SHLL.W  R3
+        ADD.W   #E_STACK,R3
+        MOV.W   @R3,R0
+        MOV.W   R0,@E_PAGE
+        MOV.B   @(2,R3),R0
+        MOV.B   R0,@E_SEL
+        MOV.B   @(3,R3),R0
+        MOV.B   R0,@E_TOP
+        CLR.B   @E_EDIT
+        MOV.B   #1,@K_REDRAW
+kgo9:   RTS
+
+; ---- the link's SysEx commands (page open) ----
+keys_sxcmd:
+        MOV.B   @K_SXCMD,R0
+        BNE     ksx0
+        RTS
+ksx0:   CMP.B   #0x12,R0
+        BNE     ksx2
+        MOV.W   #K_SXB+3,R2              ; 12 a1 a0 + 8 nibbles (high first): coefficient a1 * 128 + a0
+        JSR     @ksx_w
+        MOV.W   R3,R4
+        JSR     @ksx_w
+        MOV.W   R3,R5
+        MOV.B   @K_SXB+2,R1
+        TST.B   @K_SXB+1
+        BEQ     ksx1
+        OR.B    #0x80,R1
+ksx1:   JSR     @kcw
+        BRA     ksx8
+ksx2:   CMP.B   #0x11,R0                 ; 11: load K_BUF
+        BNE     ksx3
+        MOV.B   #1,@K_LSRC
+        JSR     @keys_load
+        BRA     ksx8
+ksx3:   CMP.B   #0x13,R0                 ; 13: back to the ROM image
+        BNE     ksx4
+        CLR.B   @K_LSRC
+        JSR     @keys_load
+        BRA     ksx8
+ksx4:   CMP.B   #0x14,R0                 ; 14 n v: setting n = v
+        BNE     ksx8
+        MOV.B   @K_SXB+1,R1
+        CMP.B   #KS_N,R1
+        BCC     ksx8
+        CLR.W   R3
+        MOV.B   @K_SXB+2,R3
+        JSR     @kset
+ksx8:   CLR.B   @K_SXCMD
+        RTS
+ksx_w:  CLR.W   R3                       ; @R2+: 4 nibbles (high first) -> R3
+        JSR     @ksx_n
+        JSR     @ksx_n
+        JSR     @ksx_n
+ksx_n:  SHLL.W  R3
+        SHLL.W  R3
+        SHLL.W  R3
+        SHLL.W  R3
+        MOV.B   @R2+,R0
+        AND.W   #0x000F,R0
+        OR.W    R0,R3
+        RTS
+
+; power-on (ros_entry): page / link requests from before don't count
+keys_boot:
+        LDC.B   #4,DP
+        CLR.B   @K_GO
+        CLR.B   @K_REDRAW
+        CLR.B   @K_SX
+        CLR.B   @K_SXCMD
+        CLR.B   @K_LSRC
+        RTS
 kmi9:   RTS
 
 kmidi_on:                                ; K_MKEY / K_MVEL: a voice per chord tone (CHORD 1 NOTE = 8-voice poly)
@@ -724,11 +979,23 @@ krc1:   LDC.B   #0,DP
 krc9:   RTS
 
 ; ---- from k_idle (every main-loop pass): envelope decay switch, end of recording ----
-keys_tick:
+keys_tick:                               ; -> R0 = 1: k_idle goes through redraw_loop
         LDC.B   #4,DP
-        TST.B   @K_OWN
+        MOV.B   @K_GO,R0
+        BEQ     ktw1
+        CLR.B   @K_GO
+        JSR     @keys_go
+ktw1:   JSR     @ktick
+        LDC.B   #4,DP
+        CLR.W   R0
+        MOV.B   @K_REDRAW,R0
+        CLR.B   @K_REDRAW
+        RTS
+ktick:  TST.B   @K_OWN
         BEQ     ktk9
         JSR     @keys_midi
+        JSR     @keys_sxcmd
+        LDC.B   #4,DP
         MOV.B   @L_TICK,R0
         MOV.B   R0,R1
         SUB.B   @K_LASTT,R0              ; R0 = ticks since the last pass
@@ -785,12 +1052,23 @@ keys_load:
         MOV.W   R0,@-SP
         ORC.W   #0x0700,SR
         MOV.W   R6,@-SP
-        LDC.B   #0,DP
-        LDC.B   #0,EP
-        MOV.W   #keys_prog,R5            ; PLOAD: ST0, ST1, 256 words (PLOAD stays on: the DSP waits)
+        LDC.B   #0,EP                    ; PLOAD: ST0, ST1, 256 words (PLOAD stays on: the DSP waits)
+        MOV.W   #keys_prog,R5            ;   from the ROM image or the link's K_BUF
+        TST.B   @K_LSRC
+        BEQ     kld0
+        LDC.B   #4,EP
+        MOV.W   #K_BUF,R5
+kld0:   LDC.B   #0,DP
         MOV.W   #KEYS_PROG_LEN-1,R6
         PJSR    @KST_PL
-        MOV.W   #keys_cmem,R5            ; + CLOAD: all 256 coefficients, then both released
+        LDC.B   #4,DP
+        LDC.B   #0,EP                    ; + CLOAD: all 256 coefficients, then both released
+        MOV.W   #keys_cmem,R5
+        TST.B   @K_LSRC
+        BEQ     kld0b
+        LDC.B   #4,EP
+        MOV.W   #K_BUF+KEYS_PROG_LEN,R5
+kld0b:  LDC.B   #0,DP
         MOV.W   #KEYS_CMEM_LEN-1,R6
         PJSR    @KST_CL
 kld_done:
@@ -798,9 +1076,14 @@ kld_done:
         MOV.W   @SP+,R6
         MOV.W   @SP+,R0
         LDC.W   R0,SR
-        MOV.W   #K_SENT,R0               ; every setting goes out once
-kld1:   MOV.B   #0xFF,@R0+
-        CMP.W   #K_SENT+KS_N,R0
+        CLR.W   R1                       ; every setting goes out once (ROM image); none for the link's image
+kld1:   MOV.B   #0xFF,R2                 ;   (its coefficients need not be ours: the link sets them)
+        TST.B   @K_LSRC
+        BEQ     kld1a
+        MOV.B   @(K_SET,R1),R2
+kld1a:  MOV.B   R2,@(K_SENT,R1)
+        ADD.W   #1,R1
+        CMP.W   #KS_N,R1
         BNE     kld1
         CLR.W   R0
         MOV.W   R0,@K_RECN
@@ -987,6 +1270,8 @@ pg_keys:
 n_kchord: .dw   c_one, c_oct, c_fifth, c_maj, c_min, c_maj7, c_min7, c_stack
 n_kmode:  .dw   s_synth, s_sample
 n_ksrc:   .dw   s_ina, s_inb
+kcc_max:  .db   1, 127, 7, 1, 99, 99, 99, 99, 1, 99, 99, 99, 99, 99, 99, 99, 99, 99, 127   ; CC 20-38 limits
+          .align 2
 
 t_keys:   .asciz "DDS-DSP SAMPLER"
 l_keys:   .asciz "DDS-DSP SAMPLER"

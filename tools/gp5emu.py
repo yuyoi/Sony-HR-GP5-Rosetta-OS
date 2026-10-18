@@ -96,7 +96,7 @@ class Emu:
             if o in (0xFF92, 0xFFA2, 0xFFB2): s.frc_base[o] = s.icount * 2   # counter write = restart (any value)
             return
         if pg == 4 and o < 0x8000:
-            if s.strict and not (o < 0x06AE or 0x7000 <= o < 0x7100 or o >= 0x7E00 or o in s.ram_ok):
+            if s.strict and not (o < 0x06AE or 0x7000 <= o < 0x7900 or o >= 0x7E00 or o in s.ram_ok):
                 pc = (s.cp << 16) | s.pc
                 if any(lo <= pc < hi for lo, hi in s.strict):
                     raise Halt("Rosetta code wrote RAM %05X (pc %06X): outside shadow / settings / stack" % (0x40000 | o, pc))

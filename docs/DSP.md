@@ -251,6 +251,14 @@ commit cd5b496) was rebuilt for 8 voices:
   same word count (255 + idle). The scheduler keeps a rule for cat1 macc reads (MO1_GAP: t - 1 .. t - 4 read the
   same value), the simulator has `cat1_lag`, and the self-test runs at t - 2 / t - 3 / t - 4 with bit-identical
   output. Same symptom as the SP-808 KEYS idle voices (hard mute fix there).
+- **MIDI link** (0.4.3, `tools/keyslink.py`, for remote debugging over an audio loop): CC 119 opens (>= 64) / leaves
+  the page from any ROSETTA page; CC 20-38 = the page's 19 settings in order (clamped); SysEx `F0 7D 52 cmd .. F7`:
+  10 = image bytes (nibble pairs) into a 1798-byte buffer at 0x47110 (Sony never writes above 0x462F5), 11 = load
+  it into the TMS57002 (Sony's PLOAD / CLOAD through the same stubs, EP = 4), 12 = one coefficient, 13 = back to the
+  ROM image, 14 = one setting. midi_rx now parses every byte with the page closed too (Sony still gets them
+  unchanged then). Commands run from keys_tick; a CC that changes a setting goes through redraw_loop so the screen
+  and the DSP follow. Emulator test `emu_link_test`: from the home screen, CC 119 opens, CC VOLUME reaches VIN, a
+  marked image uploads and arrives byte-exact, a poke arrives, the ROM image comes back, CC 119 0 leaves.
 - Not yet: the GP5 build (two copies of each TMS routine there), sample-rate check on hardware (all pitches assume
   44.1 kHz; MIDI 77 = fs / 64 = 689 Hz, F5 -23 cents), pitch bend, no filter bypass (CUTOFF 99 = 7 kHz), no triangle wave
   (it is only used for the pulse).

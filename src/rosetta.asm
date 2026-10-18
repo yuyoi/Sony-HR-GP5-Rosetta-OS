@@ -72,6 +72,7 @@ re1:    MOV.W   #pg_root,R0
         CLR.B   @E_EDIT
         CLR.B   @E_DEPTH
         JSR     @in_reset                ; INPUT TEST: both ADC channels on
+        JSR     @keys_boot               ; DDS-DSP SAMPLER: no page / link request kept over power-off
 redraw_loop:
         JSR     @in_apply                ; INPUT TEST: send a changed mute to the DSP
         JSR     @keys_apply              ; DDS-DSP SAMPLER: own the DSP on its page, send changed settings
@@ -633,7 +634,7 @@ dsc9:   RTS
 ; ================= pages =================
 s_gt:   .asciz  ">"
 s_dots: .asciz  "..."
-s_ver:  .asciz  "v0.4.2"
+s_ver:  .asciz  "v0.4.3"
 s_soon: .asciz  "SOON"
 s_lfo1: .asciz  "LFO 1"
 
@@ -765,7 +766,7 @@ l_os:     .asciz "OS"
 l_by:     .asciz "BY"
 l_mascot: .asciz "MASCOT"
 l_base:   .asciz "BASE"
-v_os:     .asciz "ROSETTA 0.4.2"
+v_os:     .asciz "ROSETTA 0.4.3"
 v_by:     .asciz "JSW + CLAUDE"
 v_mascot: .asciz "HEX GIRL"
 v_base:   .asciz "SONY 1.03E"
