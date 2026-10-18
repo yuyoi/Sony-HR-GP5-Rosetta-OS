@@ -11,7 +11,7 @@ import anim_build, gp5emu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-VERSION = "0.4.4"
+VERSION = "0.4.5"
 PRESET_LEN = 0xB0
 
 # Everything model-specific. GP5 = HR-GP5 Ver1.03E (EPROM GP5-E1), MP5 = HR-MP5 Ver1.11 (dump rom1_11j).
@@ -220,12 +220,14 @@ def emu_tour(img, shots, model="gp5"):
         p = os.path.join(shots, name + ".png"); e.png(p); out.append((name, e.text().splitlines()))
     steps = [("SYSTEM", None), ("B", "01_root"), ("dial+1", "02_root_tempo"), ("dial+5", "03_root_about_scroll"),
              (root_key("D", model), "04_boot_page"), ("EDIT", "05_boot_edit"), ("dial-1", "06_boot_off"), ("EXIT", "07_boot_edit_off"),
-             ("EXIT", "08_back_root"), (root_key("A", model), "09_mod"), ("dial+1", None), ("EDIT", "10_mod_rate_edit"),
-             ("dial+7", "11_rate_27"), ("EXIT", None), ("dial+3", "12_mod_scrolled"), ("EXIT", None),
+             ("EXIT", "08_back_root"), (root_key("A", model), "09_mod"), ("rock+1", None), ("EDIT", "10_mod_rate_edit"),
+             ("dial+7", "11_rate_27"), ("EXIT", None), ("rock+3", "12_mod_scrolled"), ("EXIT", None),
              (root_key("E", model), "13_about"), ("EXIT", None), (root_key("C", model), "15_input"), ("E", "15b_input_source"), ("dial-1", "16_input_src_si0"),
              ("EXIT", None), ("EXIT", None), ("EXIT", "14_back_to_system")]
     for k, name in steps:
         if k.startswith("dial"): e.dial(int(k[4:]), 150000)
+        elif k.startswith("rock"):
+            for _ in range(abs(int(k[4:]))): e.rock(1 if int(k[4:]) > 0 else -1)
         else: e.press(k)
         if name: snap(name)
     ram = bytes(e.ram)
@@ -429,6 +431,46 @@ def emu_midi_test(img, model, sy):
     return dict(chord=" ".join("%.3f" % a for a in amps), off_pitch=round(off, 4), steal8=" ".join("%.3f" % a for a in amps2))
 
 
+def emu_jog_test(img, model, sy):
+    """The rocker (FDE8) and the encoder (FDE9) apart: a flick moves one row, held part way rows keep moving, held all
+    the way the page flips to the parent menu's next / previous SUB page (and again while held), the encoder edits a
+    value row without EDIT."""
+    e = new_emu(img, model); e.run(1_500_000)
+    page = lambda: e.ram[0x7010] << 8 | e.ram[0x7011]
+    sel, edit, depth = (lambda: e.ram[0x7012]), (lambda: e.ram[0x7014]), (lambda: e.ram[0x7015])
+    def items(pg):
+        return [(img[pg + 8 + 8 * i], img[pg + 10 + 8 * i] << 8 | img[pg + 11 + 8 * i]) for i in range(img[pg + 4])]
+    root = items(sy["pg_root"]); subs = [i for i, (k, _) in enumerate(root) if k == 0]
+    assert page() == sy["pg_root"] and sel() == 0, (hex(page()), sel())
+    e.rock(1); e.rock(1); assert sel() == 2, "flicks down: sel %d" % sel()
+    e.rock(-1); assert sel() == 1, "flick up: sel %d" % sel()
+    e.rock(5, hold_steps=1_400_000); scrolled = sel()
+    assert scrolled >= min(len(root) - 1, 4), "part way held: sel %d" % scrolled
+    for _ in range(len(root)): e.rock(-1)
+    assert sel() == 0
+    row = subs[1]
+    for _ in range(row): e.rock(1)
+    e.press("EDIT")
+    assert depth() == 1 and page() == root[row][1], "EDIT did not open row %d" % row
+    k, var = items(page())[0][0], None
+    pg = page(); vi = next(i for i, (kk, _) in enumerate(items(pg)) if kk in (1, 2, 5))
+    for _ in range(vi): e.rock(1)
+    ptr = img[pg + 10 + 8 * vi] << 8 | img[pg + 11 + 8 * vi]
+    v0 = e.ram[ptr & 0x7FFF]
+    e.dial(-1 if v0 > 0 else 1, 150000)
+    assert edit() == 1 and e.ram[ptr & 0x7FFF] != v0, "encoder did not edit row %d (%d -> %d)" % (vi, v0, e.ram[ptr & 0x7FFF])
+    e.press("EXIT")
+    nxt = subs[(subs.index(row) + 1) % len(subs)]; nxt2 = subs[(subs.index(row) + 2) % len(subs)]
+    e.rock(10, hold_steps=560_000)
+    assert page() == root[nxt][1] and depth() == 1 and e.ram[0x7018 + 2] == nxt, \
+        "full hold down: page %04X (want %04X), parent row %d" % (page(), root[nxt][1], e.ram[0x701A])
+    e.rock(-10, hold_steps=560_000)
+    assert page() == root[row][1], "full hold up: back to %04X, got %04X" % (root[row][1], page())
+    e.rock(10, hold_steps=1_300_000)
+    assert page() == root[nxt2][1], "held on: two pages on, %04X want %04X" % (page(), root[nxt2][1])
+    return dict(scrolled_to=scrolled, flipped="%04X -> %04X -> %04X" % (root[row][1], root[nxt][1], root[nxt2][1]))
+
+
 def emu_link_test(img, model, sy):
     """The MIDI link (tools/keyslink.py) from the ROSETTA home screen: CC 119 opens the page, a CC sets VOLUME, SysEx
     uploads a marked program + coefficient image and loads it (byte-exact at the TMS57002), pokes one coefficient,
@@ -482,6 +524,7 @@ if __name__ == "__main__":
         print("--", name)
     print("power-on with HEX GIRL off, top text row after 0.27 s:", repr(emu_boot_skip(bytes(img), ram, model)))
     print("boots into ROSETTA, EXIT stays:", emu_boots_into_rosetta(bytes(img), model, sy))
+    print("rocker / encoder:", emu_jog_test(bytes(img), model, sy))
     lv, ups = emu_input_test(bytes(img), model)
     print("INPUT page: ADC L/R segments", lv, " c(05) sent:", " ".join("%02X" % u for u in ups))
     if "keys" in PLATFORMS[model]:

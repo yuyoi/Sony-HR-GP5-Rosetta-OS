@@ -54,6 +54,7 @@ class Emu:
         s.fd01 = 0xFF
         s.icount = 0
         s.next_irq0 = 2000; s.next_tmr = 5000; s.next_tick = 3000
+        s.rocker = 0xF                          # rocker position code on FD02 row 0 high nibble (0xF = centre)
         s.midi_in = []; s.next_midi = 0         # bytes for MIDI IN (SCI at FFD8, RXI vector 0xD4), one per 480 steps (31250 baud)
         s.trace = None
         s.adc = {0xFFE0: 0xC0, 0xFFE2: 0x00}
@@ -126,6 +127,7 @@ class Emu:
                 r = row[0]
                 for c in range(4):
                     if r * 4 + c in s.keys: v &= ~(1 << c)
+                if r == 0: v = (v & 0x0F) | ((s.rocker & 0xF) << 4)   # the rocker: position code, 0xF = centre
             return v
         if o == 0xFD10: return 0xFF              # DSP ready
         if o == 0xFD03: return 0xFD              # DSP: bit0 ready, bit1 idle, bit4 ready
@@ -515,7 +517,13 @@ class Emu:
         k = KEYS[key.upper()] if isinstance(key, str) else key
         s.keys.add(k); s.run(hold_steps); s.keys.discard(k); s.run(gap_steps)
 
-    def dial(s, delta, steps=40000):
+    # rocker position codes (Sony's table at 0x134E): +1 = 0xB, -1 = 0xE, +5 = 0xD, -5 = 0x8, +10 = 0x1, -10 = 0xC
+    ROCK = {1: 0xB, -1: 0xE, 2: 0x9, -2: 0xA, 5: 0xD, -5: 0x8, 10: 0x1, -10: 0xC}
+
+    def rock(s, step, hold_steps=60000, gap_steps=150000):
+        s.rocker = s.ROCK[step]; s.run(hold_steps); s.rocker = 0xF; s.run(gap_steps)
+
+    def dial(s, delta, steps=40000):      # the encoder (FDE9)
         s.onchip[0xFDE9 - 0xFD00] = delta & 0xFF; s.run(steps)
 
     # ---------------- LCD render ----------------

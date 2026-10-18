@@ -144,7 +144,11 @@ k_idle:
         TST.B   R0
         BEQ     ki00
         JMP     @redraw_loop             ; (CC 119 opened / left the page, a CC changed a setting)
-ki00:   LDC.B   #4,DP
+ki00:   JSR     @jog_tick                ; the rocker: rows / pages
+        TST.B   R0
+        BEQ     ki01
+        JMP     @redraw_loop
+ki01:   LDC.B   #4,DP
         LDC.B   #0,EP
         MOV.W   @E_PAGE,R5
         CMP.W   #pg_input,R5

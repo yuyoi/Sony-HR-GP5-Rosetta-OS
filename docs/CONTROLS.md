@@ -36,10 +36,19 @@ follow from the scanner.
 | **A + SYSTEM** (k1 + k9) | runs `0x0406` / `0x0479` (init?) then **factory TEST mode** at `0x05488` (ENC/PDL/SW/JOG checks, Serial Port Check, RAM test, ROM sum) |
 | **BYPASS + EXIT** (k11 + k8) | runs `0x0406` / `0x0479`, then boots normally: **probably memory initialise (factory reset)**, not verified, so don't try it with patches you care about |
 
-## Dial (rotary encoder)
-- Input port `FD20`, state in `FDEA` / `FDEB` (`sub_0123D` seeds them).
-- Deltas: `FDE8` and `FDE9` (signed bytes). `dial_delta` `0x006EF` returns their sum in R4 and clears both.
+## Rocker and encoder (two controls, read from the MP5 1.11 scan code)
+- **Rocker** (the TEST mode's "ENC"): a multi-position switch on the key matrix, row 0 (`FD01` bit 0 low), `FD02`
+  bits 7-4. Sony's table at `0x134E` maps the position code to a step: centre `0xF` = 0, `0xB` / `0xE` = +1 / -1,
+  `0x9` / `0xA` = +-2, `0xD` / `0x8` = +-5, all the way = +-10. The 5 ms tick writes the step to `FDE8` every 8
+  ticks (`FDEA` counts down), every tick once held all the way for 100 ticks; `FDEC` counts the ticks held all the way.
+- **Encoder** (the TEST mode's "JOG"): a counter on port `FD20`; each tick `FDE9` = +1 / -1 if it moved (`FDEB` =
+  the last value), so one step per tick whatever the speed.
+- `dial_delta` `0x006EF` returns `FDE8 + FDE9` in R4 and clears both: in Sony's screens the two do the same.
 - In the dispatcher, a non-zero delta calls the screen's slot 12 handler with R4 = delta.
+- **Rosetta (0.4.5)** takes `FDE8` out before the dispatcher (`jog_take`), so they are separate on its pages:
+  the encoder edits the selected value row at once (no EDIT), else moves the selection; the rocker: a flick = one row,
+  held part way = rows keep moving (after 0.4 s, every 0.15 s), held all the way 0.35 s = the parent menu's next /
+  previous page, again every 0.6 s. EDIT opens a submenu, EXIT leaves it. Sony's own screens are unchanged.
 
 ## Other inputs and outputs (from code)
 - `FD03`: read by the DSP driver (status / handshake), see [MEMORY_MAP.md](MEMORY_MAP.md).

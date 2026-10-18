@@ -41,6 +41,13 @@
         .equ E_DEPTH, RV+0x15
         .equ E_VCOL, RV+0x16             ; scratch: item index while drawing a row
         .equ E_STACK, RV+0x18            ; 4 x (page.w, sel.b, top.b)
+        .equ J_ACC, RV+0x28              ; rocker steps not handled yet (signed, jog_take)
+        .equ J_DIR, RV+0x29              ; 0 = let go, 1 / 0xFF = held that way
+        .equ J_T0, RV+0x2A               ; L_TICK when the press started
+        .equ J_TL, RV+0x2B               ;   at its last step
+        .equ J_TP, RV+0x2C               ;   at the last page change
+        .equ J_PG, RV+0x2D               ; page changes in this press
+        .equ J_TR, RV+0x2E               ;   at the last row move
         .equ NUMBUF, RV+0x30
         .equ MAGIC, 0x5253
 
@@ -73,6 +80,8 @@ re1:    MOV.W   #pg_root,R0
         CLR.B   @E_DEPTH
         JSR     @in_reset                ; INPUT TEST: both ADC channels on
         JSR     @keys_boot               ; DDS-DSP SAMPLER: no page / link request kept over power-off
+        CLR.B   @J_ACC                   ; rocker: let go
+        CLR.B   @J_DIR
 redraw_loop:
         JSR     @in_apply                ; INPUT TEST: send a changed mute to the DSP
         JSR     @keys_apply              ; DDS-DSP SAMPLER: own the DSP on its page, send changed settings
@@ -80,6 +89,7 @@ redraw_loop:
 ros_loop:
         JSR     @ui_poll_a
         JSR     @ui_poll_b
+        JSR     @jog_take                ; the rocker's steps out of Sony's dial sum: the dial slot only gets the encoder
         MOV.B   #12,R1                   ; dial -> slot 12 always (Sony routes it to the last A-F key's slot)
         LDC.B   #0,DP
         MOV.W   #ros_table,R0
@@ -207,25 +217,22 @@ ke2:    SUB.B   #1,R1
 k_dial: TST.W   R4                       ; R4 = dial delta (0 = idle: Sony calls this slot on every pass)
         BNE     kd0
         JMP     @k_idle                  ; live meters (src/inputtest.asm), then back to ros_loop
-kd0:
+kd0:                                     ; the encoder: a value row is edited at once, else the selection moves
         LDC.B   #4,DP
         LDC.B   #0,EP
         BTST.B  #0,@E_EDIT
         BNE     dial_edit
-        CLR.W   R2                       ; move the selection
-        MOV.B   @E_SEL,R2
-        ADD.W   R4,R2
-        BPL     kd1
-        CLR.W   R2
-kd1:    MOV.W   @E_PAGE,R5
-        CLR.W   R3
-        MOV.B   @(4,R5),R3
-        SUB.W   #1,R3                    ; R3 = last index
-        CMP.W   R3,R2
-        BLE     kd2
-        MOV.W   R3,R2
-kd2:    MOV.B   R2,@E_SEL
-        JSR     @fix_top
+        JSR     @cur_item
+        MOV.B   @(2,R5),R1
+        CMP.B   #K_NUM,R1
+        BEQ     kd1
+        CMP.B   #K_LIST,R1
+        BEQ     kd1
+        CMP.B   #K_DYN,R1
+        BNE     kd2
+kd1:    BSET.B  #0,@E_EDIT
+        BRA     dial_edit
+kd2:    JSR     @sel_move
         JMP     @redraw_loop
 dial_edit:
         JSR     @cur_item
@@ -263,6 +270,166 @@ de2:    MOV.B   R2,@R0
         BEQ     de3
         JSR     @R1
 de3:    JMP     @redraw_loop
+
+; ================= rocker / encoder (separate) =================
+; The panel has a rocker (Sony's scan: FD02 high nibble = position, +-1 / 2 / 5 / 10 steps into FDE8, repeated while
+; held; FDEC = ticks held at full deflection) and an encoder (FD20 counter -> +-1 into FDE9). Sony's dial_delta adds
+; both. Rosetta takes the rocker's steps first (jog_take, top of ros_loop), so the dial slot only sees the encoder:
+;   encoder: edits the selected row's value at once (value rows), else moves the selection
+;   rocker:  a flick = one row up / down, held part way = rows keep moving, held all the way = previous / next page
+;            (the parent menu's other SUB pages), again every JOG_REP ticks while held
+        .equ JOG_GAP, 15                 ; ticks (5 ms) without a rocker step = let go (Sony repeats every 8)
+        .equ JOG_SCROLL, 80              ; part way: rows start moving after this ...
+        .equ JOG_ROW, 30                 ; ... one row per this
+        .equ JOG_FULL, 70                ; all the way (FDEC) this long: the page changes
+        .equ JOG_REP, 120                ; and again every this
+
+jog_take:                                ; FDE8 (rocker) -> J_ACC; keeps every register, DP and the interrupt mask
+        MOV.W   R0,@-SP
+        MOV.W   R1,@-SP
+        STC.W   SR,R1
+        ORC.W   #0x0700,SR               ; (the tick writes FDE8)
+        STC.B   DP,R0
+        MOV.W   R0,@-SP
+        LDC.B   #0,DP
+        MOV.B   @0xFDE8,R0
+        BEQ     jtk9
+        CLR.B   @0xFDE8
+        LDC.B   #4,DP
+        ADD.B   @J_ACC,R0
+        MOV.B   R0,@J_ACC
+jtk9:   MOV.W   @SP+,R0
+        LDC.B   R0,DP
+        LDC.W   R1,SR
+        MOV.W   @SP+,R1
+        MOV.W   @SP+,R0
+        RTS
+
+; jog_tick (k_idle): -> R0 = 1 if the screen must be redrawn
+jog_tick:
+        LDC.B   #4,DP
+        LDC.B   #0,EP
+        LDC.B   #0,DP
+        MOV.B   @0xFDEC,R2               ; R2 = ticks at full deflection
+        LDC.B   #4,DP
+        MOV.B   @L_TICK,R1               ; R1 = now
+        MOV.B   @J_ACC,R0
+        BEQ     jgt5
+        CLR.B   @J_ACC
+        MOV.B   R1,@J_TL
+        MOV.B   #1,R3
+        TST.B   R0
+        BPL     jgt1
+        MOV.B   #0xFF,R3
+jgt1:   CMP.B   @J_DIR,R3
+        BEQ     jgt2
+        MOV.B   R3,@J_DIR                ; a new press: one row that way
+        MOV.B   R1,@J_T0
+        MOV.B   R1,@J_TR
+        CLR.B   @J_PG
+        BRA     jgt3
+jgt2:   CMP.B   #8,R2                    ; the same press, part way: rows keep moving after JOG_SCROLL
+        BCC     jgt5
+        MOV.B   R1,R0
+        SUB.B   @J_T0,R0
+        CMP.B   #JOG_SCROLL,R0
+        BCS     jgt5
+        MOV.B   R1,R0
+        SUB.B   @J_TR,R0
+        CMP.B   #JOG_ROW,R0
+        BCS     jgt5
+        MOV.B   R1,@J_TR
+jgt3:   CLR.W   R4
+        MOV.B   @J_DIR,R4
+        EXTS.B  R4
+        JSR     @sel_move
+        MOV.W   #1,R0
+        RTS
+jgt5:   TST.B   @J_DIR                   ; held all the way: the page changes
+        BEQ     jgt9
+        CMP.B   #JOG_FULL,R2
+        BCS     jgt7
+        TST.B   @J_PG
+        BEQ     jgt6
+        MOV.B   R1,R0
+        SUB.B   @J_TP,R0
+        CMP.B   #JOG_REP,R0
+        BCS     jgt9
+jgt6:   MOV.B   R1,@J_TP
+        MOV.B   #1,@J_PG
+        MOV.B   R1,@J_TL
+        MOV.B   @J_DIR,R2
+        JSR     @page_flip
+        MOV.W   #1,R0
+        RTS
+jgt7:   MOV.B   R1,R0                    ; let go?
+        SUB.B   @J_TL,R0
+        CMP.B   #JOG_GAP,R0
+        BCS     jgt9
+        CLR.B   @J_DIR
+jgt9:   CLR.W   R0
+        RTS
+
+; sel_move: R4 = rows to move -> E_SEL (clamped), E_TOP fixed, edit off (DP 4, EP 0)
+sel_move:
+        CLR.B   @E_EDIT
+        CLR.W   R2
+        MOV.B   @E_SEL,R2
+        ADD.W   R4,R2
+        BPL     sm1
+        CLR.W   R2
+sm1:    MOV.W   @E_PAGE,R5
+        CLR.W   R3
+        MOV.B   @(4,R5),R3
+        SUB.W   #1,R3                    ; R3 = last index
+        CMP.W   R3,R2
+        BLE     sm2
+        MOV.W   R3,R2
+sm2:    MOV.B   R2,@E_SEL
+        JMP     @fix_top
+
+; page_flip: R2 = 1 / 0xFF -> the parent menu's next / previous SUB page (nothing at the top level)
+page_flip:
+        CLR.W   R1
+        MOV.B   @E_DEPTH,R1
+        BEQ     pfl9
+        SUB.W   #1,R1
+        SHLL.W  R1
+        SHLL.W  R1
+        ADD.W   #E_STACK,R1              ; R1 = the parent's entry (page.w, sel.b, top.b)
+        MOV.W   @R1,R5                   ; R5 = parent page (ROM, EP 0)
+        CLR.W   R3
+        MOV.B   @(4,R5),R3               ; R3 = its row count
+        CLR.W   R0
+        MOV.B   @(2,R1),R0               ; R0 = the row this page came from
+        MOV.W   R3,R6                    ; R6 = rows left to try
+pfl1:   ADD.B   R2,R0
+        CMP.B   #0xFF,R0
+        BNE     pfl2
+        MOV.B   R3,R0
+        SUB.B   #1,R0
+pfl2:   CMP.B   R3,R0
+        BCS     pfl3
+        CLR.B   R0
+pfl3:   CLR.W   R4                       ; R4 = row R0 of the parent
+        MOV.B   R0,R4
+        SHLL.W  R4
+        SHLL.W  R4
+        SHLL.W  R4
+        ADD.W   R5,R4
+        ADD.W   #6,R4
+        CMP.B   #K_SUB,@(2,R4)
+        BEQ     pfl4
+        SUB.W   #1,R6
+        BNE     pfl1
+pfl9:   RTS
+pfl4:   MOV.B   R0,@(2,R1)               ; EXIT goes back to that row
+        MOV.W   @(4,R4),R0
+        MOV.W   R0,@E_PAGE
+        CLR.B   @E_SEL
+        CLR.B   @E_TOP
+        CLR.B   @E_EDIT
+        RTS
 
 ; ================= helpers =================
 cur_item:                                ; R5 = current page + 6 + sel*8   (DP=4, EP=0)
@@ -634,7 +801,7 @@ dsc9:   RTS
 ; ================= pages =================
 s_gt:   .asciz  ">"
 s_dots: .asciz  "..."
-s_ver:  .asciz  "v0.4.4"
+s_ver:  .asciz  "v0.4.5"
 s_soon: .asciz  "SOON"
 s_lfo1: .asciz  "LFO 1"
 
@@ -766,7 +933,7 @@ l_os:     .asciz "OS"
 l_by:     .asciz "BY"
 l_mascot: .asciz "MASCOT"
 l_base:   .asciz "BASE"
-v_os:     .asciz "ROSETTA 0.4.4"
+v_os:     .asciz "ROSETTA 0.4.5"
 v_by:     .asciz "JSW + CLAUDE"
 v_mascot: .asciz "HEX GIRL"
 v_base:   .asciz "SONY 1.03E"
