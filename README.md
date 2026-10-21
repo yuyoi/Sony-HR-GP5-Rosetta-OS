@@ -2,6 +2,8 @@
 
 <p align="center"><img src="docs/hexgirl_boot.gif" width="684" alt="Hex girl boot animation on the HR-GP5 LCD"></p>
 
+<p align="center"><a href="https://discord.gg/R3CQkFdRtf"><img src="https://img.shields.io/badge/Discord-join%20the%20Rosetta%20server-5865F2?logo=discord&logoColor=white" alt="Join the Discord"></a></p>
+
 A custom boot for the **Sony HR-GP5** (1994 half-rack guitar processor, same hardware as the HR-MP5). **Hex girl**,
 the Rosetta mascot, slides up on the 228 x 40 LCD, blinks, smiles, then "JSW OS" and "ROSETTA" type in. After that the
 stock HR-GP5 screen appears and the unit runs as normal. It's the same boot as the
