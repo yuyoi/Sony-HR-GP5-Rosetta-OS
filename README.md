@@ -1,4 +1,7 @@
-# Sony HR-GP5 Rosetta OS  (WIP)
+# HR-GP5 Rosetta OS: the Sony HR-GP5 / HR-MP5 mod (custom firmware + polyphonic DSP synth)
+
+**Sony HR-GP5 (HRGP5) and HR-MP5 (HRMP5) mod / custom OS / firmware upgrade**, tested on real hardware: a 15-voice
+MIDI synth on the TMS57002 effects DSP, new menus and a Hex Girl boot. Website: https://yuyoi.github.io/Sony-HR-GP5-Rosetta-OS/
 
 <p align="center"><img src="docs/hexgirl_boot.gif" width="684" alt="Hex girl boot animation on the HR-GP5 LCD"></p>
 

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sony HR-GP5 / HR-MP5 Mod: Rosetta OS custom firmware + polyphonic DSP synth</title>
+<meta name="description" content="Sony HR-GP5 (HRGP5) and HR-MP5 mods by Rosetta: custom firmware with a Hex Girl boot animation, new menus and a 15-voice polyphonic synth running on the TMS57002 DSP, played over MIDI. One chip swap, tested on real hardware, free and open source.">
+<meta name="keywords" content="Sony HR-GP5, HR-GP5, HRGP5, HR-GP5 mod, Sony HR-MP5, HR-MP5, HRMP5, HR-MP5 mod, HR-GP5 firmware, custom firmware, TMS57002, DSP synth, guitar processor mod, half rack">
+<link rel="canonical" href="https://yuyoi.github.io/Sony-HR-GP5-Rosetta-OS/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Sony HR-GP5 / HR-MP5 Mod: Rosetta OS + DSP synth">
+<meta property="og:description" content="New firmware for the Sony HR-GP5 and HR-MP5: boot animation, new menus, and a 15-voice MIDI synth on the effects DSP. Tested on real hardware.">
+<meta property="og:url" content="https://yuyoi.github.io/Sony-HR-GP5-Rosetta-OS/">
+<meta property="og:image" content="https://yuyoi.github.io/Sony-HR-GP5-Rosetta-OS/img/hexgirl_icon.png">
+<meta name="twitter:card" content="summary">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"HR-GP5 Rosetta OS","applicationCategory":"MultimediaApplication","operatingSystem":"Sony HR-GP5 / HR-MP5, Windows/Python for the tools","description":"Custom firmware mod for the Sony HR-GP5 and HR-MP5 half-rack guitar processors: boot animation, new menus and a polyphonic MIDI synth on the TMS57002 DSP.","url":"https://yuyoi.github.io/Sony-HR-GP5-Rosetta-OS/","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+</script>
+<style>
+:root{--bg:#f6f6f3;--paper:#fff;--fg:#17181a;--muted:#5c5f63;--rule:#d6d7d2;--bar:#17181a;--bar-fg:#f6f6f3;--accent:#d2461e;--lcd:#b9c94a;--lcd-ink:#28300e}
+@media (prefers-color-scheme:dark){:root{--bg:#121314;--paper:#1b1c1e;--fg:#ececea;--muted:#a3a6aa;--rule:#2e3033;--bar:#ececea;--bar-fg:#121314}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 "Helvetica Neue",Arial,sans-serif}
+.wrap{max-width:920px;margin:0 auto;padding:0 16px}
+header{padding:40px 0 24px;text-align:center}
+header img.hero{width:220px;height:220px;image-rendering:pixelated}
+h1{font-size:2rem;line-height:1.2;margin:16px 0 8px}
+.lede{color:var(--muted);font-size:1.1rem;margin:0 auto;max-width:640px}
+.lcd{display:inline-block;margin:20px 0 0;background:var(--lcd);color:var(--lcd-ink);font:600 1.1rem/1.3 "Courier New",monospace;padding:10px 16px;border-radius:4px;letter-spacing:.06em}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:24px 0 8px}
+.btn{display:inline-block;padding:12px 18px;border-radius:6px;background:var(--accent);color:#fff;text-decoration:none;font-weight:700}
+.btn.alt{background:transparent;color:var(--fg);border:2px solid var(--fg)}
+h2{background:var(--bar);color:var(--bar-fg);font-size:1rem;letter-spacing:.08em;text-transform:uppercase;padding:8px 12px;margin:40px 0 16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.card{background:var(--paper);border:1px solid var(--rule);border-radius:6px;padding:14px 16px}
+.card b{display:block;margin-bottom:4px}
+.card span{color:var(--muted);font-size:.95rem}
+.card audio{width:100%;margin-top:10px}
+figure{margin:16px 0;text-align:center}
+figure img{max-width:100%;border:1px solid var(--rule);border-radius:4px;image-rendering:pixelated}
+figcaption{color:var(--muted);font-size:.9rem;margin-top:6px}
+ol li{margin:6px 0}
+footer{color:var(--muted);font-size:.9rem;padding:40px 0;border-top:1px solid var(--rule);margin-top:40px}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<img class="hero" src="img/hexgirl_icon.png" alt="Rosetta: Hex Girl badge">
+<h1>Sony HR-GP5 / HR-MP5 Mod: Rosetta OS + DSP synth</h1>
+<p class="lede">New firmware for the Sony HR-GP5 (HRGP5) and HR-MP5 half-rack guitar processors. One chip swap in the stock socket, no board mod. Free, open source, and tested on a real unit.</p>
+<div class="lcd">ROSETTA 0.4.8</div>
+<div class="cta">
+<a class="btn" href="https://github.com/yuyoi/Sony-HR-GP5-Rosetta-OS">Rosetta OS on GitHub</a>
+<a class="btn alt" href="https://discord.gg/R3CQkFdRtf">Join the Discord</a>
+</div>
+</header>
+
+<h2>Listen</h2>
+<p>Played live on a real unit over MIDI and recorded straight off its outputs. Nothing added after.</p>
+<div class="grid">
+<div class="card"><b>15-voice madness</b><span>15-note chords and arpeggio storms, BITS 16 down to 4, RATE crush, a GLITCH wall.</span><audio controls preload="none" src="audio/fifteen_voice_madness.mp3"></audio></div>
+<div class="card"><b>Filter acid</b><span>Acid line and pads, CUTOFF and RESONANCE swept live over MIDI.</span><audio controls preload="none" src="audio/filter_acid.mp3"></audio></div>
+</div>
+
+<h2>What the mod adds</h2>
+<div class="grid">
+<div class="card"><b>Polyphonic DSP synth</b><span>Our own program on the TMS57002 effects DSP: 8 smooth voices, or 15 raw ones. Sine, saw and pulse with width, ADSR, a stereo resonant filter, stereo spread.</span></div>
+<div class="card"><b>8-bit and crush modes</b><span>BITS 16 / 12 / 8 / 6 / 4, RATE crush and GLITCH, on all 15 voices.</span></div>
+<div class="card"><b>MIDI in on all channels</b><span>Velocity, sustain pedal, chords per key. Every setting on a MIDI CC, so a DAW can play and tweak it live.</span></div>
+<div class="card"><b>Guitar thru</b><span>THRU mixes the guitar input in with the synth.</span></div>
+<div class="card"><b>Hex Girl boot</b><span>The Rosetta mascot animates on the 228 x 40 LCD at power-on, then the unit starts as normal.</span></div>
+<div class="card"><b>New menus</b><span>A ROSETTA page on the front panel. On the HR-MP5 firmware the encoder edits values and the rocker moves between rows and pages.</span></div>
+<div class="card"><b>HR-MP5 firmware on an HR-GP5</b><span>Same board: the stereo HR-MP5 firmware runs on the HR-GP5.</span></div>
+</div>
+<p>Every feature above has been confirmed on hardware.</p>
+<figure><img src="hexgirl_boot.gif" alt="Hex Girl boot animation on the HR-GP5 LCD" loading="lazy"><figcaption>The boot animation, as the LCD shows it.</figcaption></figure>
+
+<h2>How it works</h2>
+<ol>
+<li>Read your own firmware EPROM (LE27C1001, DIP32) on a programmer such as a T48. Keep the original.</li>
+<li>Run <code>tools/rosetta_build.py</code>. It patches your dump and writes the burn file.</li>
+<li>Burn a 27C010 / 27C1001, or an SST39SF040 (the image written 4 times), and fit it in the socket. Put the original back and it's a stock unit again.</li>
+</ol>
+
+<h2>Community</h2>
+<p>Questions, hardware reports and ideas: <a href="https://discord.gg/R3CQkFdRtf">join the Discord</a>. More Rosetta OS mods: <a href="https://github.com/yuyoi/D110-rosetta-OS-v11">D-110</a>, <a href="https://github.com/yuyoi/Sp-808-rosetta-looper-OS-">SP-808</a>, <a href="https://github.com/yuyoi/Akai-S2000-Rosetta-OS">Akai S2000</a>, <a href="https://github.com/yuyoi/super-Gp-16-Rosetta-OS">GP-16</a>, <a href="https://github.com/yuyoi/u110-romhex-studio">U-110</a>.</p>
+
+<footer>Made by JunkSmithWizard (JSW) together with Claude (Anthropic's AI). No Sony code or ROM data is included: the tools patch your own dump. Sony, HR-GP5 and HR-MP5 are names of Sony Corporation, used only to say what this works with. MIT licence.</footer>
+</div>
+</body>
+</html>
